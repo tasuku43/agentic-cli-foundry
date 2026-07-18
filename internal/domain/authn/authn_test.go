@@ -215,3 +215,47 @@ func TestCloneOwnsIndependentSlices(t *testing.T) {
 		t.Fatal("Session.Clone() retained shared slice storage")
 	}
 }
+
+func TestUserConfigurationIsBoundedSecretFreeAndCloneable(t *testing.T) {
+	configuration := UserConfiguration{
+		SchemaVersion: UserConfigurationSchemaVersion,
+		Method:        MethodOAuth2,
+		Parameters: []PublicParameter{
+			{Name: "public_client_id", Value: "example-public-client"},
+			{Name: "redirect_uri", Value: "http://127.0.0.1/callback"},
+		},
+	}
+	if err := configuration.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	clone := configuration.Clone()
+	clone.Parameters[0].Value = "changed"
+	if configuration.Parameters[0].Value != "example-public-client" {
+		t.Fatal("UserConfiguration.Clone() retained shared storage")
+	}
+
+	invalid := []UserConfiguration{
+		{},
+		{SchemaVersion: 2, Method: MethodOAuth2, Parameters: []PublicParameter{}},
+		{SchemaVersion: 1, Method: MethodUnknown, Parameters: []PublicParameter{}},
+		{SchemaVersion: 1, Method: MethodPAT, Parameters: nil},
+		{SchemaVersion: 1, Method: MethodPAT, Parameters: []PublicParameter{{Name: "Bad-Name", Value: "value"}}},
+		{SchemaVersion: 1, Method: MethodPAT, Parameters: []PublicParameter{{Name: "refresh_token", Value: "forbidden"}}},
+		{SchemaVersion: 1, Method: MethodPAT, Parameters: []PublicParameter{{Name: "name", Value: "value"}, {Name: "name", Value: "other"}}},
+	}
+	for index, candidate := range invalid {
+		if err := candidate.Validate(); err == nil {
+			t.Errorf("invalid configuration %d passed validation", index)
+		}
+	}
+
+	typeOf := reflect.TypeOf(UserConfiguration{})
+	for index := 0; index < typeOf.NumField(); index++ {
+		field := strings.ToLower(typeOf.Field(index).Name + " " + typeOf.Field(index).Tag.Get("json"))
+		for _, forbidden := range []string{"token", "secret", "credential", "password", "authorization", "verifier", "code"} {
+			if strings.Contains(field, forbidden) {
+				t.Errorf("UserConfiguration contains credential-bearing field %q", typeOf.Field(index).Name)
+			}
+		}
+	}
+}

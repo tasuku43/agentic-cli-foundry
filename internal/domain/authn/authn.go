@@ -1,6 +1,6 @@
-// Package authn defines secret-free authentication requirements and session
-// metadata. Credential acquisition and every token-bearing value belong to
-// infrastructure adapters, not to this package.
+// Package authn defines secret-free authentication requirements, user setup,
+// and session metadata. Credential acquisition and every token-bearing value
+// belong to infrastructure adapters, not to this package.
 package authn
 
 import (
