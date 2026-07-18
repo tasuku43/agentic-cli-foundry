@@ -134,13 +134,15 @@ Every strong statement should identify its enforcement path.
 | Layer dependency | Go-aware architecture lint and import-boundary tests |
 | Finite domain state | Types, constructors, and table-driven negative tests |
 | Catalog completeness | Whole-catalog contract tests |
-| Discover-to-act composition | Reachable reference-graph validation, required act references, and byte-preserving round-trip tests |
+| Action target composition | Reachable reference-graph validation and byte-preserving round trips for reference-bound acts; complete, exclusive, reference-free declarations for command-bound fixed targets |
 | Side-effect ordering | Fake adapter counters and failure-before-I/O tests |
 | Mutation outcome classification | Structured-fault-first/cause-stripping tests, non-retryable unclassified outcome fallback, and read-only recovery validation |
 | Authentication precondition | Secret-free session contract, zero-downstream-call tests, and catalog validation of every standard gate fault's code/kind/retryability |
 | Authentication binding | Opaque JSON-excluded/fmt-redacted binding type, infrastructure-only issuance lint, exact pass-through test, and derived two-account/stale-binding/refresh-race adapter fixtures |
 | Pagination completeness | Cursor loop/budget/cancellation tests, retryability/catalog agreement, and no-partial-result assertion |
 | Public paged continuation | Catalog validation of one exact same-kind optional input/top-level output binding, JSON-only presentation, and agent-help/reference-workflow projection |
+| Non-secret authentication configuration | Bounded strict codec, unknown-schema and unsafe-file rejection, atomic replacement, fail-closed source precedence, and read-only status tests |
+| Human authentication handoff | Agent-readiness records environment exports, re-entry, browser/terminal transfers, OS integration, ceremonial inputs, and first-run/steady-state invocations |
 | Retry safety | Timeout/attempt/idempotency validation and adapter contract tests |
 | Agent recovery | Catalog fault declarations, exact-path/help-selector executable grammar tests, and structured error snapshots |
 | Bounded root discovery | Fixed root-index shape, 512-byte per-command entry validation, and 100-command growth/selection tests |

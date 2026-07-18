@@ -39,7 +39,7 @@ The default public output and exit contract is:
 | `doctor` | Complete TSV headed `CHECK<TAB>STATUS<TAB>DETAIL`, or JSON schema version 1 under `report`; status is `pass`, `warn`, or `fail` |
 | sample list | Complete TSV headed `id<TAB>name`, or JSON schema version 1 under `items`; every emitted ID is an unchanged reusable reference |
 | sample read | Complete TSV headed `id<TAB>name<TAB>content`, or JSON schema version 1 under `item` |
-| agent help | JSON schema version 3: root `view: index` returns path/namespace/summary/capability/outcome/effect/role entries plus a machine-readable scope request; selected `view: scope` returns global I/O/error rules, complete command contracts, and applicable reference workflows |
+| agent help | JSON schema version 4: root `view: index` returns path/namespace/summary/capability/outcome/effect/role entries plus a machine-readable scope request; selected `view: scope` returns global I/O/error rules, complete command contracts (including an optional fixed target), and applicable reference workflows |
 | structured failure | JSON schema version 1 on stderr under `error`, selected by placing `--error-format json` before the command; text is the default |
 | version | `agentic-cli-foundry <version> (<commit>)` when commit metadata is available |
 | exit `0` | Successful command |
@@ -104,11 +104,13 @@ Do not add a command merely because an external system exposes an operation. Rec
 
 ### Separate discovery from action
 
-Each command is a `utility`, `discover`, or `act` task. A discovery command owns filters and ambiguity, returns candidates, and exposes an opaque ID. An action command consumes a declared opaque reference and never chooses among candidates. Do not hide a second search or candidate choice inside an action.
+Each command is a `utility`, `discover`, or `act` task. Discovery owns filters and ambiguity. An action uses exactly one target-binding mode: a required opaque reference for an external or selected target, or a catalog-declared `tool_local` fixed target when the command path uniquely identifies one CLI-owned singleton. Fixed targets publish stable kind, ID, scope, and description, produce and consume no references, and cannot be combined with a reference. Do not hide a search or candidate choice inside an action or label an externally selected object fixed.
 
 The ID shown by discovery passes unchanged into action. Do not decode, normalize, reconstruct, or substitute a resource URL merely because an external system exposes those forms. Display labels are for people; opaque references are for stable composition.
 
 The default `sample list` and `sample read --id` pair exists to make this flow executable. A derived project replaces its synthetic sample domain with a real task while preserving or deliberately revising the role and reference contracts.
+
+A fixed target is appropriate for state such as this installation's one selected authentication configuration when the command path itself supplies all target certainty. It removes no mutation facts: effect, intent, runtime target, impact, policy, failures, and reconciliation remain required.
 
 The sample reference kind is `sample`. `sample list` produces field `id`; `sample read` consumes argument `--id`. A sample ID is `smp_` followed by exactly twelve lowercase hexadecimal characters. The CLI validates that shape without changing the bytes and rejects names, partial IDs, uppercase variants, URLs, resource paths, whitespace, and control characters before the adapter runs.
 
@@ -122,7 +124,7 @@ Arbitrary routes, opaque parameter maps, unrestricted scripts, and pass-through 
 
 ### Keep provider policy in the derived product
 
-The base template fixes fail-closed authentication, external-call, pagination, failure, output, and mutation enforcement boundaries. It does not select a provider, OAuth grant or library version, PAT source, credential store, account and refresh policy, retry/backoff values, or approval experience. Those choices depend on the real user outcome and trust boundary, so the derived product contract and security model must make them concrete before live I/O is enabled. See [Authentication](07_authentication.md) and [External API Contracts](08_external_api_contracts.md).
+The base template fixes fail-closed authentication, bounded non-secret user-configuration, external-call, pagination, failure, output, and mutation enforcement boundaries. It does not select a provider, concrete configuration fields, OAuth grant or library version, PAT source, credential store, account and refresh policy, browser/callback policy, retry/backoff values, or approval experience. Those choices depend on the real user outcome and trust boundary, so the derived product contract and security model must make them concrete before live I/O is enabled. See [Authentication](07_authentication.md) and [External API Contracts](08_external_api_contracts.md).
 
 ## Explicit non-goals of the base template
 

@@ -154,6 +154,14 @@ The gate's expiry check is an admission snapshot, not a lease over the subsequen
 
 The binding is process-local correlation metadata. Do not persist it, cache it across sessions, render it, log it, accept it from a user, or use it as proof of possession. Provider flow, storage, refresh locking, cache policy, and approval remain derived-project decisions.
 
+## Non-secret user configuration
+
+`authn.UserConfiguration` is persistable setup metadata, not credential material. It records a supported schema version, one explicitly selected authentication method, and a bounded list of public name/value parameters. Suitable parameters include a public client ID or public redirect URI. Tokens, PATs, refresh tokens, authorization codes, PKCE verifiers, client secrets, authorization headers, and credential-store handles are forbidden even if a provider happens to serialize one as text.
+
+The application resolver gives a present environment source precedence over persistent configuration. A present but invalid environment value fails closed; it does not reveal or fall back to the persistent value. Missing environment configuration permits the persistent source. Corrupt, unsafe, or unknown-schema persistent configuration is an error, not absence. Once a method is selected, authentication invokes only that method; failure never triggers probing or fallback to another credential family.
+
+The provider-neutral file store accepts an injected path and creates no default state. It strictly decodes one bounded JSON value, rejects unknown fields and schema versions, validates bounded unique public parameters, requires an owner-only regular file, rejects symbolic links and non-regular targets, and replaces through a same-directory owner-only temporary file plus atomic rename. Its read-only status reports missing, valid, or invalid state and never repairs a partial or corrupt result. Credentials require a separate project-selected store and threat model.
+
 ## OAuth decision
 
 OAuth protocol behavior is security-sensitive and provider-dependent. The template must not implement authorization URL construction, state or nonce validation, PKCE, callback handling, code exchange, token parsing, refresh, or authenticated transport itself.
@@ -166,6 +174,8 @@ When a derived project selects OAuth 2.0:
 4. Pin the selected version and review its license, maintainers, transitive graph, release history, and vulnerability status.
 5. Use the library for protocol machinery while retaining provider-specific validation and policy in the adapter.
 6. Run `go mod verify`, `govulncheck`, dependency review, adapter tests, and the full one gate.
+
+The derived design also separates four responsibilities: protocol code constructs and validates the authorization exchange; CLI presentation prints a usable manual URL; a platform/process adapter may attempt browser auto-open; and a bounded callback adapter receives the redirect. Auto-open failure returns the same manual URL rather than changing flow or method. Passing an authorization URL through a browser subprocess argv retains process-list and diagnostic-log exposure of its public query metadata and must be documented. Authorization codes, PKCE verifiers, access/refresh tokens, client secrets, and PATs never enter subprocess argv. Callback listeners bind the documented local address, validate state/PKCE through the reviewed OAuth implementation, bound time and requests, and return no provider secret to presentation.
 
 This accepts a bounded supply-chain dependency in preference to maintaining a private OAuth implementation. The dependency is optional so PAT-only projects do not inherit that risk or update burden.
 

@@ -67,8 +67,10 @@ For every external action, specify:
 
 - effect: read, create, or write; unknown is never executable;
 - target, scope, and all generic impact dimensions (cardinality, notification, access change, destructive);
-- for create, exactly one required argument/flag opaque `parent_input`, no `target_id_input`, and no other `target_inputs`;
-- for write, one required argument/flag opaque `target_id_input` whose reference kind equals `TargetKind`, plus an optional distinct opaque parent role whose input is required when present; `target_inputs` contains only those bound roles;
+- choose exactly one target-binding mode for `RoleAct`: required opaque reference input(s), or one complete command-bound `tool_local` fixed target when the command path identifies a CLI-owned singleton;
+- for reference-bound create, exactly one required argument/flag opaque `parent_input`, no `target_id_input`, and no other `target_inputs`;
+- for reference-bound write, one required argument/flag opaque `target_id_input` whose reference kind equals `TargetKind`, plus an optional distinct opaque parent role whose input is required when present; `target_inputs` contains only those bound roles;
+- for a fixed-target mutation, an explicit empty `target_inputs`, no input-role fields, and a `TargetKind` matching the fixed target kind; create uses it as scope and write as the existing target;
 - validation performed before the external boundary;
 - finite timeout, pagination/completeness, maximum attempts, and upstream idempotency behavior;
 - which derived policy applies at `app/execution.Invoker`; do not make the template assume approval, confirmation, OS authentication, or dry-run;
@@ -109,7 +111,7 @@ adapter.
 
 Do not hand-maintain `ProducedRef` or `ConsumedRef`. Reference compatibility,
 workflows, and next actions derive from structured input/output reference kinds.
-An act command must require at least one opaque reference. Give semantically
+An act command must either require at least one opaque reference or declare one complete `tool_local` fixed target, never both. A fixed-target act produces and consumes no references. Give semantically
 different references different kinds; sharing a kind declares them
 interchangeable across every matching field/input edge. Ensure required
 reference chains lead back to a command that can run without an unresolved
@@ -175,6 +177,8 @@ external API capability.
   before a provider task request.
 - Do not implement OAuth protocol machinery. Add a reviewed OAuth library only
   in a derived project whose accepted security model selects OAuth.
+- Keep schema-versioned non-secret user configuration separate from credential storage. Decode it strictly within a byte bound, fail closed on an invalid higher-priority environment or persistent value, and never probe another method after a selected method fails.
+- If OAuth launches a browser, separate URL presentation, platform auto-open, and callback receipt; retain a manual URL fallback and never place authorization codes, PKCE verifiers, tokens, PATs, or client secrets in subprocess argv.
 - Make one-page adapters return an opaque cursor envelope. Use bounded
   complete traversal, or declare a paged public result with the catalog-bound
   optional cursor input and next-cursor output.

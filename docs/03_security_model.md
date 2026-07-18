@@ -89,6 +89,8 @@ Discovery output may contain labels controlled by an external system, but action
 
 The sample contract accepts only `smp_` followed by twelve lowercase hexadecimal characters. Its negative tests reject alternate forms before the sample adapter runs.
 
+A command-bound `tool_local` fixed target is the only no-reference action mode. It is safe only when the command path identifies exactly one CLI-owned local object and the catalog fixes its stable kind, ID, scope, and description. It cannot represent an external object, account choice, arbitrary path, or candidate set. Fixed-target mutations still construct a matching runtime `TargetRef`, complete impact, intent, policy decision, and outcome contract before I/O.
+
 ## Controlled execution boundary
 
 All filesystem writes, subprocess execution, credential access, network calls, and platform services must have a bounded construction path. A command or use case must not receive an unrestricted client merely because it is convenient.
@@ -109,7 +111,7 @@ Application ports treat both a nil interface and an interface containing a typed
 
 ## Credentials and secrets
 
-The base template contains a secret-free authentication contract, an ephemeral non-serialized session binding, and an application gate, but no concrete credential acquisition or storage implementation. A derived project must document:
+The base template contains a secret-free authentication contract, an ephemeral non-serialized session binding, an application gate, and a separate provider-neutral store for bounded non-secret user authentication configuration, but no concrete credential acquisition or credential storage implementation. A derived project must document:
 
 - credential issuer and scope;
 - acquisition and refresh flow;
@@ -118,7 +120,7 @@ The base template contains a secret-free authentication contract, an ephemeral n
 - revocation and expiration behavior;
 - tests and scans that fail on unsafe handling.
 
-Secrets must not cross from infrastructure into domain or application values and must not be accepted through command-line arguments when a safer channel is available. Do not persist tokens in plaintext configuration or test real credentials in CI. Read [Authentication](07_authentication.md) and [ADR 0001](decisions/0001-oauth-library-boundary.md) before implementing OAuth or PAT support.
+Secrets must not cross from infrastructure into domain or application values and must not be accepted through command-line arguments when a safer channel is available. Public client identifiers, public redirect URIs, the explicitly selected method, and schema metadata may use the non-secret configuration boundary; token, PAT, refresh token, authorization code, PKCE verifier, and client secret never do. The boundary uses strict bounded decoding, rejects unknown schema, symlinks, non-regular files, and unsafe permissions, replaces atomically, and reports corrupt state read-only rather than repairing or falling back. Do not persist tokens in plaintext configuration or test real credentials in CI. Read [Authentication](07_authentication.md) and [ADR 0001](decisions/0001-oauth-library-boundary.md) before implementing OAuth or PAT support.
 
 ## Filesystem, process, and network policy
 

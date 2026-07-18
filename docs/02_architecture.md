@@ -93,11 +93,13 @@ At minimum, catalog validation rejects:
 - argv input metadata whose `Required` value or ordered `AllowedValues` disagree with the small bracket/`a|b` usage grammar; non-argv sources are excluded from this syntax check;
 - missing or inconsistent common runtime failures (`operation_canceled`, output `output_write_failed`, standard authentication-gate failures, and standard mutation-invoker contract/policy/unknown-outcome failures), or an unknown-outcome recovery that points to another mutation;
 - recovery commands that are only catalog prefixes, contain unchecked argv, use an unknown help selector, or otherwise fall outside the exact-path/`help <path-or-namespace>` grammar;
-- read commands with mutation metadata, creates without exactly one required CLI parent binding, writes without a matching required CLI existing-target binding, unbound or extra target inputs, and mutations without complete impact;
+- read commands with mutation metadata; incomplete reference-bound create/write roles; incomplete, mixed, or mismatched fixed-target mutation binding; unbound or extra target inputs; and mutations without complete impact;
 - a root agent-index entry larger than 512 encoded bytes, which would let selection prose crowd detailed scoped contracts as the catalog grows;
 - command metadata that cannot produce consistent help and routing.
 
 ## Command roles and opaque reference flow
+
+Actions use exactly one target-binding mode. `AgentContract.FixedTarget` is the command-bound declaration: stable kind, ID, description, and the only supported scope `tool_local`. Only `RoleAct` may declare it, and a fixed-target command has no produced or consumed reference edge. External, ambiguous, or caller-selected targets remain reference-bound. Scoped agent-help schema version 4 publishes the optional fixed target while the compact root index shape remains unchanged.
 
 `CommandRole` describes where a task sits in a user workflow:
 
@@ -105,12 +107,12 @@ At minimum, catalog validation rejects:
 |---|---|
 | `RoleUtility` | Repository or runtime operation that is neither candidate discovery nor unique-target action |
 | `RoleDiscover` | Owns ambiguity and may emit opaque references with candidates |
-| `RoleAct` | Requires and operates on at least one declared opaque reference without choosing among candidates |
+| `RoleAct` | Operates on exactly one target-binding mode: required opaque reference(s), or one command-bound `tool_local` fixed singleton; never chooses among candidates |
 | `RoleUnknown` | Invalid for a public command |
 
 Reference kinds live on `AgentContract.Output.Fields`, `AgentContract.Inputs`, and the top-level cursor field owned by `AgentContract.Pagination`. `ProducedRef` and `ConsumedRef` are compatibility projections, not a second declaration. The catalog derives the reference graph, scoped workflows, and next actions from those fields. A shared kind is an explicit claim that every value of that kind is interchangeable at each matching input; use distinct kinds when fields or target roles are not interchangeable. Every kind needs a producer and consumer, and the required-reference dependency graph must be reachable from at least one command that can run without an unresolved required reference. Optional first-page cursors do not create a dependency. `CommandOutput.Fields` always describe values inside the declared JSON envelope; a public `paged` output owns its separate cursor name, string type, description, and shared opaque kind in `Pagination`. Its typed `completion: "empty_cursor"` rule makes an always-present empty string the sole completion marker. Human help may stay concise; scoped agent help exposes the exact graph, pagination binding, and field meanings.
 
-Agent-help schema version 3 separates selection from invocation detail. Root `help --format agent` is an `index` view containing only each command's path, top-level namespace, summary, capability ID, outcome, effect, and role. Each encoded command entry has a 512-byte catalog budget. Its `scope_request` names `commands[].path` and `commands[].namespace` as selectors and supplies the exact invocation template. `help <selector> --format agent` is a `scope` view containing global I/O/error contracts, complete selected `AgentContract` values, and reference workflows touching the selection. Its I/O contract marks external text as untrusted data, declares visible structural projection, and distinguishes validated exact opaque references. A known path therefore needs one help invocation; an unknown outcome needs the root index and one scoped invocation. Root size still grows with the number of outcomes, but detailed inputs, outputs, authentication, failures, mutations, and workflows do not multiply there.
+Agent-help schema version 4 separates selection from invocation detail. Root `help --format agent` is an `index` view containing only each command's path, top-level namespace, summary, capability ID, outcome, effect, and role. Each encoded command entry has a 512-byte catalog budget. Its `scope_request` names `commands[].path` and `commands[].namespace` as selectors and supplies the exact invocation template. `help <selector> --format agent` is a `scope` view containing global I/O/error contracts, complete selected `AgentContract` values (including an optional fixed target), and reference workflows touching the selection. Its I/O contract marks external text as untrusted data, declares visible structural projection, and distinguishes validated exact opaque references. A known path therefore needs one help invocation; an unknown outcome needs the root index and one scoped invocation. Root size still grows with the number of outcomes, but detailed inputs, outputs, authentication, failures, mutations, and workflows do not multiply there.
 
 Catalog `CommandOutput` metadata is executable compatibility data, not descriptive decoration. Generic CLI contract tests run each built-in JSON renderer and compare its `schema_version`, declared envelope, and every item key with the corresponding catalog declaration. Agent-help shape snapshots separately fix the intentionally different root and scoped views.
 
@@ -142,7 +144,7 @@ Effect answers **what class of action occurs**:
 
 Intent answers **what this invocation is allowed to affect**. A mutation intent includes a `TargetRef` and an `Impact`. Cardinality and the notification, access-change, and destructive dimensions must all be explicit; their zero values fail closed. Derived projects extend this base with domain-owned detail such as recipients, visibility changes, publication destinations, or workflow triggers.
 
-`MutationContract` connects required public argument or flag inputs to that runtime intent. For `Create`, `parent_input` names the single opaque parent or scope reference and `target_id_input` is absent because the object does not exist yet. For `Write`, `target_id_input` names an opaque reference whose kind equals `TargetKind`; an optional, distinct `parent_input` can bind additional scope. `target_inputs` must contain exactly these named roles. A free-form, optional, non-CLI, duplicated, non-reference, or mismatched binding fails catalog validation rather than being treated as a safe mutation.
+`MutationContract` connects catalog target binding to runtime intent. The reference-bound branch is unchanged: for `Create`, `parent_input` names the single opaque parent or scope reference; for `Write`, `target_id_input` names an opaque reference whose kind equals `TargetKind` and an optional distinct `parent_input` can bind scope. The fixed-target branch requires an explicitly non-nil empty `target_inputs`, no input-role fields, and a `TargetKind` equal to `FixedTarget.Kind`; create treats the singleton as creation scope and write as the existing target. Missing, extra, duplicate, non-reference, mixed-mode, or mismatched binding fails before policy or I/O.
 
 The catalog binding and runtime `TargetRef` are complementary checks: the former proves that an agent can supply an unambiguous target from the command contract, while the latter proves that the concrete invocation presented to policy and infrastructure has the declared target and impact. Neither replaces the other.
 
@@ -180,7 +182,7 @@ Do not render inside domain, application, or infrastructure packages. Do not mak
 Add capabilities in this order:
 
 1. User outcome and product-contract decision.
-2. Utility, discover, or act role and any opaque reference flow.
+2. Utility, discover, or act role and its exclusive reference-bound or command-bound target flow.
 3. Domain vocabulary, effect, intent, reference validation, and invariants.
 4. Application input, result, use case, and owned ports.
 5. Infrastructure adapter satisfying those ports.

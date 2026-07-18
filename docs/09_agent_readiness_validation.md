@@ -4,7 +4,7 @@ This validation asks whether a coding agent can discover, execute, interpret, an
 
 ## What counts as a round trip
 
-A round trip is one CLI invocation whose purpose is to learn what invocation should come next. The task invocation itself and a necessary authentication ceremony are counted separately. Parsing a declared JSON or TSV field is not an additional discovery round trip; scraping prose, guessing a URL, or probing variants is.
+A round trip is one CLI invocation whose purpose is to learn what invocation should come next. The task invocation and authentication ceremony are counted separately, but the ceremony must also publish the human-handoff scorecard below. Parsing a declared JSON or TSV field is not an additional discovery round trip; scraping prose, guessing a URL, or probing variants is.
 
 The target is:
 
@@ -13,6 +13,8 @@ The target is:
 - discover reference to read/write: no extra lookup or transformation invocation;
 - classified failure to next corrective command: no prose interpretation or command guessing.
 
+For each setup/authentication candidate, record required environment variables or exports, fixed values re-entered, terminal-to-browser transfers, browser-to-terminal transfers, clipboard or OS-integration dependencies, discover-to-act trips that do not contribute to target selection, first-run commands, steady-state commands, and ceremonial inputs that add no target certainty. These values compare candidates; they are not a scalar optimization target. A handoff may be justified when it materially improves safety, explicit consent, or agent certainty.
+
 ## Contract-level validation method
 
 For each derived command, verify all four stages.
@@ -20,7 +22,7 @@ For each derived command, verify all four stages.
 | Stage | Evidence |
 |---|---|
 | Discover | Root `view: index` exposes path, namespace, summary, capability, outcome, effect, and role plus a machine-readable `scope_request`; selected `view: scope` declares inputs, input sources, prerequisites, effect, output, authentication, errors, mutation facts, and workflow edges |
-| Execute | Arguments are copied from declared fields or explicit configuration; the resolved command, effect, create-parent/write-target binding, runtime target, auth requirement, and impact validate before I/O |
+| Execute | Arguments are copied from declared fields or explicit configuration; the resolved command, exclusive reference/fixed target binding, effect, runtime target, auth requirement, and impact validate before I/O |
 | Interpret | Machine output has declared fields/types/completeness; structural runes are visibly projected; scoped I/O metadata marks external text as untrusted data; opaque references remain validated exact values |
 | Recover | Failure kind/code/retryability/next actions are structured; auth, permission, ambiguity, missing targets, rate limits, temporary failure, cancellation, and contract failure remain distinct |
 
@@ -95,11 +97,11 @@ go run ./cmd/agentic-cli-foundry sample read --id smp_2f4a6c8e0b1d --format json
 go run ./cmd/agentic-cli-foundry --error-format json sample read --id smp_000000000000
 ```
 
-The root agent contract must be schema version 3 with `view: index`, reveal the `sample` namespace and both exact paths, and contain no input, output, authentication, error, mutation, or workflow detail. Its `scope_request` must identify the selector fields, exact invocation template, two-invocation unknown-outcome bound, and one-invocation known-path bound. The scoped contract must use `view: scope`, contain only the relevant list/read commands and their reference workflow, and provide the complete global and command contracts. Its `io_contract` must publish `external_text_trust: untrusted_data`, `external_text_projection: visible_escape`, and `opaque_reference_policy: validated_exact_bytes`. The `id` selected from the list JSON is field extraction, not identifier transformation: pass its exact string bytes to read. The final probe must fail as `not_found`, use the dedicated exit status, write no success data to stdout, and name `sample list` as the structured next action on stderr.
+The root agent contract must be schema version 4 with `view: index`, reveal the `sample` namespace and both exact paths, and contain no input, output, authentication, error, mutation, fixed-target, or workflow detail. Its `scope_request` must identify the selector fields, exact invocation template, two-invocation unknown-outcome bound, and one-invocation known-path bound. The scoped contract must use `view: scope`, contain only the relevant list/read commands and their reference workflow, and provide the complete global and command contracts. Its `io_contract` must publish `external_text_trust: untrusted_data`, `external_text_projection: visible_escape`, and `opaque_reference_policy: validated_exact_bytes`. The `id` selected from the list JSON is field extraction, not identifier transformation: pass its exact string bytes to read. The final probe must fail as `not_found`, use the dedicated exit status, write no success data to stdout, and name `sample list` as the structured next action on stderr.
 
 ### Scoped-help footprint evidence
 
-On the template catalog, the 2026-07-18 UTF-8 measurements are 1,517 bytes for root agent help, 5,359 bytes for exact `sample read` help, and 8,359 bytes for the `sample` namespace. These measurements are evidence, not yet a scoped contract budget. The existing 512-byte limit bounds each root selection entry, while scoped schema v3 deliberately repeats global error metadata and complete command-local contracts.
+On the template catalog, the pre-schema-4 2026-07-18 UTF-8 measurements were 1,517 bytes for root agent help, 5,359 bytes for exact `sample read` help, and 8,359 bytes for the `sample` namespace. These measurements are evidence, not yet a scoped contract budget. The existing 512-byte limit bounds each root selection entry, while scoped help deliberately repeats global error metadata and complete command-local contracts.
 
 A future scoped budget must not be implemented by deleting recovery or invocation facts. Evaluate a dictionary/code-reference representation and an explicit minimal-execution versus complete-contract split against a fixed derived-catalog corpus and tokenizer. The regression scenario must prove all four stages: discover an unknown outcome within two help calls; execute from exact typed inputs and effects; interpret fields, completeness, and opaque reference bytes; and recover from every classified fault through a structured next command. Only then set whole-response UTF-8 and token budgets and version the schema if its shape changes.
 

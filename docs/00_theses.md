@@ -126,15 +126,17 @@ Humans and agents should be able to discover a command, invoke it, and interpret
 - Which deterministic workflow should be one command rather than several agent steps?
 - How does a user obtain the unique identifier required by an action?
 
-## Thesis 3: Separate discovery from action and pass opaque IDs unchanged
+## Thesis 3: Separate discovery from action and bind one target explicitly
 
-Discovery owns ambiguity. Action owns one uniquely identified target. The opaque identifier emitted by a discovery command is accepted unchanged by the corresponding action command.
+Discovery owns ambiguity. Action owns one uniquely identified target. External or caller-selected targets are bound by an opaque identifier emitted by discovery and accepted unchanged. A command path may instead bind one CLI-owned local singleton when no target choice exists.
 
 ### Consequences
 
 - Every public command has a `CommandRole`: `RoleUtility`, `RoleDiscover`, or `RoleAct`; `RoleUnknown` is invalid.
 - A `discover` command may accept filters, return zero or more candidates, and emit stable opaque IDs.
-- An `act` command requires at least one declared opaque reference and never chooses among candidates.
+- An `act` command uses exactly one target-binding mode: at least one required opaque reference, or one complete catalog-declared fixed target with scope `tool_local`.
+- A fixed target has a stable kind, stable ID, description, and scope; the command path is the selection, so the command produces and consumes no references.
+- Fixed targets are not a shortcut for external resources, multiple candidates, account selection, or caller-provided local paths.
 - An action does not search again, choose the “best” candidate, accept a copied resource URL as an implicit alternative, or reconstruct an identifier from display fields.
 - The ID is not decoded, normalized, case-folded, unescaped, or reformatted between producer and consumer unless its domain type explicitly defines that transformation.
 - Display labels may change without changing the reference contract.
@@ -143,10 +145,11 @@ Discovery owns ambiguity. Action owns one uniquely identified target. The opaque
 
 - `cli.CommandSpec` declares `Role`; reference kinds are attached once to structured input and output fields in its `AgentContract`.
 - The catalog derives `ProducedRef{Kind, Field}` and `ConsumedRef{Kind, Argument}` projections from those fields, so routing, help, and reference-flow checks cannot drift across parallel registries.
-- Catalog validation rejects an incomplete role/reference declaration.
+- Catalog validation rejects incomplete, mixed, or role-inconsistent reference/fixed-target declarations.
 - Agent help projects role and reference flow from the same catalog used by dispatch.
 - Whole-catalog tests prove every consumed reference has a visible producer, every produced reference has a consumer, and no required-reference cycle is closed off from an invocable producer.
 - Round-trip tests pass the exact opaque ID bytes emitted by discovery into the action command.
+- Fixed-target tests prove that scoped agent help supplies target certainty without ceremonial discovery or input.
 - Negative tests reject URLs, resource paths, control characters, and undocumented alternative reference forms before adapter execution.
 
 The runnable proof is `sample list` -> `sample read --id`. It uses reference kind `sample`, producer field `id`, and consumer argument `--id`. The synthetic ID is `smp_` followed by exactly twelve lowercase hexadecimal characters. Validation rejects uppercase, partial IDs, names, URLs, whitespace, and resource paths without rewriting them.
@@ -155,6 +158,7 @@ The runnable proof is `sample list` -> `sample read --id`. It uses reference kin
 
 - Which command owns ambiguity and returns candidates?
 - What opaque reference kind connects discovery to action?
+- If no selection exists, is the object truly one CLI-owned singleton whose stable identity is fixed by the command path?
 - Is the action target truly unique, and where is that proven?
 - Which tempting identifier conversions would couple the CLI to an external storage or URL format?
 - If no in-tool producer exists, what product and catalog change is needed before exposing the action?
@@ -167,7 +171,7 @@ An operation's effect, intent, and target are product facts. They must be known 
 
 - `read`, `create`, and `write` are explicit domain values, not guesses derived from an HTTP verb or function name.
 - Mutations carry an `operation.Intent` and `operation.TargetRef`.
-- The public mutation contract binds declared CLI inputs to target roles: `create` consumes one opaque parent/scope reference and no pre-existing target ID; `write` consumes an opaque ID for the existing target and may also consume a distinct opaque parent/scope reference.
+- The public mutation contract either binds declared CLI reference inputs to target roles or binds one command-declared `tool_local` singleton. A reference-bound `create` consumes one opaque parent/scope reference; a reference-bound `write` consumes an opaque existing-target ID and may consume a distinct parent. A fixed-target mutation has no target inputs; `create` treats the singleton as creation scope and `write` treats it as the existing target.
 - `target_inputs` is the complete set of role-bound target inputs, not an unclassified list that can contain extra selectors.
 - Unknown or inconsistent effects fail closed.
 - Authentication, confirmation, audit, dry-run, and policy decisions can attach to one execution boundary.
@@ -177,7 +181,7 @@ An operation's effect, intent, and target are product facts. They must be known 
 
 - Domain constructors and validation reject unknown or incomplete mutation intent.
 - The catalog requires a declared effect for every public command.
-- Catalog validation rejects a read with mutation metadata, a create without exactly one required CLI `parent_input` or with a `target_id_input`, and a write whose required CLI `target_id_input` is absent, unbound, non-opaque, or a different reference kind from `TargetKind`. It also rejects duplicate or extra target inputs and an invalid optional parent role.
+- Catalog validation retains every reference-bound rule and additionally rejects a fixed-target mutation unless `target_inputs` is an explicit empty list, both input-role fields are absent, and `TargetKind` equals the fixed target kind.
 - Architecture lint prevents application code from importing concrete infrastructure.
 - Negative tests prove that validation failure occurs before the side effect.
 
