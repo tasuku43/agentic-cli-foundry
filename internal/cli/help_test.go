@@ -46,6 +46,40 @@ func TestCommandHelpUsesCatalogMetadataAndDerivedReferences(t *testing.T) {
 	}
 }
 
+func TestAgentAndHumanHelpPublishFixedTarget(t *testing.T) {
+	spec := fixedTargetActSpec("auth status")
+	help, found := DefaultCatalog().Lookup("help")
+	if !found {
+		t.Fatal("default catalog lacks help")
+	}
+	catalog := NewCatalog(help, spec)
+	var stdout, stderr bytes.Buffer
+	command := newCLI(strings.NewReader(""), &stdout, &stderr, catalog, nil)
+	if code := runCLI(command, []string{"help", "auth", "status", "--format=agent"}); code != ExitOK {
+		t.Fatalf("agent help code = %d, stderr = %q", code, stderr.String())
+	}
+	var document agentDocument
+	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Commands) != 1 || document.Commands[0].Contract.FixedTarget == nil ||
+		*document.Commands[0].Contract.FixedTarget != *spec.Agent.FixedTarget ||
+		len(document.Commands[0].ProducesRefs) != 0 || len(document.Commands[0].ConsumesRefs) != 0 {
+		t.Fatalf("fixed-target agent projection = %+v", document.Commands)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runCLI(command, []string{"auth", "status", "--help"}); code != ExitOK {
+		t.Fatalf("human help code = %d, stderr = %q", code, stderr.String())
+	}
+	for _, want := range []string{"Fixed target:", "auth-config", "selected", "tool_local", "selected authentication configuration"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("human help lacks %q: %s", want, stdout.String())
+		}
+	}
+}
+
 func TestRootAgentHelpIsACompactProjectionOfTheCatalog(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	command := New(strings.NewReader(""), &stdout, &stderr)

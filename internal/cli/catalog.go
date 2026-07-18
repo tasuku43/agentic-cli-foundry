@@ -69,6 +69,24 @@ type ConsumedRef struct {
 	Argument string `json:"argument"`
 }
 
+// FixedTargetScope identifies where a command-bound target is owned. The
+// template currently permits only a singleton owned by this CLI installation.
+type FixedTargetScope string
+
+const (
+	FixedTargetScopeUnknown   FixedTargetScope = ""
+	FixedTargetScopeToolLocal FixedTargetScope = "tool_local"
+)
+
+// FixedTarget identifies one stable target selected entirely by the command
+// path. It is mutually exclusive with produced or consumed opaque references.
+type FixedTarget struct {
+	Kind        string           `json:"kind"`
+	ID          string           `json:"id"`
+	Description string           `json:"description"`
+	Scope       FixedTargetScope `json:"scope"`
+}
+
 // InputSource identifies the public channel through which one command input is
 // supplied. InputSourceUnknown is invalid so an omitted source fails closed.
 type InputSource string
@@ -262,6 +280,7 @@ type AgentContract struct {
 	Pagination     *PaginationContract `json:"pagination,omitempty"`
 	Prerequisites  []string            `json:"prerequisites"`
 	Authentication *authn.Requirement  `json:"authentication,omitempty"`
+	FixedTarget    *FixedTarget        `json:"fixed_target,omitempty"`
 	Errors         []CommandError      `json:"errors"`
 	Mutation       *MutationContract   `json:"mutation,omitempty"`
 }
@@ -377,7 +396,7 @@ func DefaultCatalog() Catalog {
 					},
 					Completeness:      OutputCompletenessComplete,
 					JSONEnvelope:      "commands",
-					JSONSchemaVersion: 3,
+					JSONSchemaVersion: 4,
 				},
 				Prerequisites: []string{},
 				Errors: []CommandError{
@@ -635,6 +654,11 @@ func validateAgentContract(command CommandSpec) error {
 	if err := validateContractText("outcome", contract.Outcome); err != nil {
 		return err
 	}
+	if contract.FixedTarget != nil {
+		if err := validateFixedTarget(*contract.FixedTarget); err != nil {
+			return err
+		}
+	}
 	if contract.Inputs == nil {
 		return fmt.Errorf("agent inputs are unknown; use an explicit empty list when there are none")
 	}
@@ -889,6 +913,24 @@ func validateAgentContract(command CommandSpec) error {
 	mutation := contract.Mutation
 	if err := validateReferenceName(mutation.TargetKind); err != nil {
 		return fmt.Errorf("mutation target kind: %w", err)
+	}
+	if contract.FixedTarget != nil {
+		if mutation.TargetKind != contract.FixedTarget.Kind {
+			return fmt.Errorf("mutation target kind must match fixed target kind %q", contract.FixedTarget.Kind)
+		}
+		if mutation.TargetInputs == nil {
+			return fmt.Errorf("fixed-target mutation target_inputs must be an explicit empty list")
+		}
+		if len(mutation.TargetInputs) != 0 {
+			return fmt.Errorf("fixed-target mutation target_inputs must be empty")
+		}
+		if mutation.ParentInput != "" || mutation.TargetIDInput != "" {
+			return fmt.Errorf("fixed-target mutation must not declare parent_input or target_id_input")
+		}
+		if err := mutation.Impact.Validate(); err != nil {
+			return fmt.Errorf("mutation impact: %w", err)
+		}
+		return nil
 	}
 	if mutation.TargetInputs == nil || len(mutation.TargetInputs) == 0 {
 		return fmt.Errorf("mutation target inputs are unknown")
@@ -1273,10 +1315,16 @@ func validateCommandReferenceRole(command CommandSpec) error {
 
 	switch command.Role {
 	case RoleUtility:
+		if command.Agent.FixedTarget != nil {
+			return fmt.Errorf("only act commands may declare a fixed target")
+		}
 		if len(produced) != 0 || len(consumed) != 0 {
 			return fmt.Errorf("utility commands must not produce or consume references")
 		}
 	case RoleDiscover:
+		if command.Agent.FixedTarget != nil {
+			return fmt.Errorf("only act commands may declare a fixed target")
+		}
 		if command.Effect != operation.EffectRead {
 			return fmt.Errorf("discover commands must have read effect")
 		}
@@ -1284,6 +1332,12 @@ func validateCommandReferenceRole(command CommandSpec) error {
 			return fmt.Errorf("discover commands must produce at least one reference")
 		}
 	case RoleAct:
+		if command.Agent.FixedTarget != nil {
+			if len(produced) != 0 || len(consumed) != 0 {
+				return fmt.Errorf("fixed-target act commands must not produce or consume references")
+			}
+			return nil
+		}
 		if len(consumed) == 0 {
 			return fmt.Errorf("act commands must consume at least one reference")
 		}
@@ -1297,6 +1351,22 @@ func validateCommandReferenceRole(command CommandSpec) error {
 		if !hasRequiredReference {
 			return fmt.Errorf("act commands must require at least one opaque reference")
 		}
+	}
+	return nil
+}
+
+func validateFixedTarget(target FixedTarget) error {
+	if err := validateReferenceName(target.Kind); err != nil {
+		return fmt.Errorf("fixed target kind: %w", err)
+	}
+	if err := validateReferenceName(target.ID); err != nil {
+		return fmt.Errorf("fixed target ID: %w", err)
+	}
+	if err := validateContractText("fixed target description", target.Description); err != nil {
+		return err
+	}
+	if target.Scope != FixedTargetScopeToolLocal {
+		return fmt.Errorf("fixed target scope must be %q", FixedTargetScopeToolLocal)
 	}
 	return nil
 }
@@ -1457,6 +1527,10 @@ func cloneAgentContract(contract AgentContract) AgentContract {
 	if contract.Authentication != nil {
 		authentication := contract.Authentication.Clone()
 		contract.Authentication = &authentication
+	}
+	if contract.FixedTarget != nil {
+		fixedTarget := *contract.FixedTarget
+		contract.FixedTarget = &fixedTarget
 	}
 	contract.Errors = cloneSlice(contract.Errors)
 	for index := range contract.Errors {

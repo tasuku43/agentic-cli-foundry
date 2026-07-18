@@ -16,7 +16,7 @@ type helpFormat uint8
 const (
 	helpFormatText helpFormat = iota
 	helpFormatAgent
-	agentHelpSchemaVersion = 3
+	agentHelpSchemaVersion = 4
 )
 
 type agentIndexDocument struct {
@@ -278,6 +278,9 @@ func renderCommandHelp(command CommandSpec) []byte {
 	fmt.Fprintln(&output, "Outcome: "+command.Agent.Outcome)
 	fmt.Fprintln(&output, "Effect: "+command.Effect.String())
 	fmt.Fprintln(&output, "Role: "+command.Role.String())
+	if target := command.Agent.FixedTarget; target != nil {
+		fmt.Fprintf(&output, "Fixed target: %s %s (%s) - %s\n", target.Kind, target.ID, target.Scope, target.Description)
+	}
 	for _, reference := range command.ProducedRefs() {
 		fmt.Fprintf(&output, "Produces reference: %s in field %s\n", reference.Kind, reference.Field)
 	}

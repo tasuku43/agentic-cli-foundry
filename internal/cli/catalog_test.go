@@ -111,6 +111,16 @@ func actSpec(path, kind string, inputs ...string) CommandSpec {
 	return spec
 }
 
+func fixedTargetActSpec(path string) CommandSpec {
+	spec := utilitySpec(path)
+	spec.Role = RoleAct
+	spec.Agent.FixedTarget = &FixedTarget{
+		Kind: "auth-config", ID: "selected", Description: "This CLI installation's selected authentication configuration.",
+		Scope: FixedTargetScopeToolLocal,
+	}
+	return spec
+}
+
 func TestDefaultCatalogIsValidAndUnique(t *testing.T) {
 	catalog := DefaultCatalog()
 	if err := catalog.Validate(); err != nil {
@@ -356,6 +366,97 @@ func TestCatalogEnforcesRoleAndReferenceFlowContracts(t *testing.T) {
 		if err := catalog.Validate(); err == nil {
 			t.Errorf("invalid role/reference catalog %d passed validation", index)
 		}
+	}
+}
+
+func TestCatalogValidatesCommandBoundToolLocalFixedTargets(t *testing.T) {
+	valid := fixedTargetActSpec("auth status")
+	if err := NewCatalog(valid).Validate(); err != nil {
+		t.Fatalf("valid fixed target: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*CommandSpec){
+		"missing kind":        func(spec *CommandSpec) { spec.Agent.FixedTarget.Kind = "" },
+		"missing ID":          func(spec *CommandSpec) { spec.Agent.FixedTarget.ID = "" },
+		"missing description": func(spec *CommandSpec) { spec.Agent.FixedTarget.Description = "" },
+		"missing scope":       func(spec *CommandSpec) { spec.Agent.FixedTarget.Scope = FixedTargetScopeUnknown },
+		"wrong scope":         func(spec *CommandSpec) { spec.Agent.FixedTarget.Scope = "provider" },
+		"non-act role":        func(spec *CommandSpec) { spec.Role = RoleUtility },
+		"consumed reference": func(spec *CommandSpec) {
+			spec.Args = "--id <auth-config-id>"
+			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, Required: true, Description: "Opaque config ID.", AllowedValues: []string{}, ReferenceKind: "auth-config"}}
+		},
+		"produced reference": func(spec *CommandSpec) {
+			spec.Agent.Output.Fields[0].ReferenceKind = "auth-config"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneCommandSpec(valid)
+			mutate(&candidate)
+			if err := NewCatalog(candidate).Validate(); err == nil {
+				t.Fatal("invalid fixed target passed validation")
+			}
+		})
+	}
+
+	clone := cloneCommandSpec(valid)
+	clone.Agent.FixedTarget.ID = "changed"
+	if valid.Agent.FixedTarget.ID != "selected" {
+		t.Fatal("fixed target pointer was not deep-copied")
+	}
+	encoded, err := json.Marshal(valid.Agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"kind":"auth-config"`, `"id":"selected"`, `"scope":"tool_local"`, `"description":"This CLI installation's selected authentication configuration."`} {
+		if !bytes.Contains(encoded, []byte(want)) {
+			t.Errorf("fixed target JSON lacks %s: %s", want, encoded)
+		}
+	}
+}
+
+func TestFixedTargetMutationPreservesMutationSafetyContract(t *testing.T) {
+	status := fixedTargetActSpec("auth status")
+	write := fixedTargetActSpec("auth reset")
+	write.Effect = operation.EffectWrite
+	write.Agent.Errors = append(write.Agent.Errors, mutationRuntimeErrors(write.Path)...)
+	for index := range write.Agent.Errors {
+		if write.Agent.Errors[index].Code == "unclassified_mutation_outcome" {
+			write.Agent.Errors[index].NextActions[0].Command = status.Path
+		}
+	}
+	write.Agent.Mutation = &MutationContract{
+		TargetKind: "auth-config", TargetInputs: []string{},
+		Impact: operation.Impact{Cardinality: operation.CardinalityOne, Notification: operation.DeclarationNo, AccessChange: operation.DeclarationNo, Destructive: operation.DeclarationYes},
+	}
+	if err := NewCatalog(status, write).Validate(); err != nil {
+		t.Fatalf("valid fixed-target mutation: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*CommandSpec){
+		"target kind mismatch": func(spec *CommandSpec) { spec.Agent.Mutation.TargetKind = "other" },
+		"nil target inputs":    func(spec *CommandSpec) { spec.Agent.Mutation.TargetInputs = nil },
+		"unknown target input": func(spec *CommandSpec) { spec.Agent.Mutation.TargetInputs = []string{"--missing"} },
+		"nonempty target input": func(spec *CommandSpec) {
+			spec.Agent.Mutation.TargetInputs = []string{"--id"}
+		},
+		"parent input":    func(spec *CommandSpec) { spec.Agent.Mutation.ParentInput = "--parent-id" },
+		"target ID input": func(spec *CommandSpec) { spec.Agent.Mutation.TargetIDInput = "--id" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneCommandSpec(write)
+			mutate(&candidate)
+			if err := validateAgentContract(candidate); err == nil {
+				t.Fatal("invalid fixed-target mutation passed validation")
+			}
+		})
+	}
+
+	create := cloneCommandSpec(write)
+	create.Path = "auth initialize"
+	create.Effect = operation.EffectCreate
+	if err := validateAgentContract(create); err != nil {
+		t.Fatalf("fixed target as create scope: %v", err)
 	}
 }
 
