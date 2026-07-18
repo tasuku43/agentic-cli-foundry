@@ -2,12 +2,50 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tasuku43/agentic-cli-foundry/tools/internal/projectconfig"
 )
+
+func TestRepositoryPathsSkipsTrackedDeletionAndKeepsUntrackedRenameDestination(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init", "--quiet")
+	writeRepositoryFixture(t, root, "old-path.txt", "public fixture\n")
+	runGit(t, root, "add", "old-path.txt")
+	if err := os.Rename(filepath.Join(root, "old-path.txt"), filepath.Join(root, "new-path.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	status := runGit(t, root, "status", "--short", "--untracked-files=all")
+	if !strings.Contains(status, "old-path.txt") || !strings.Contains(status, "new-path.txt") {
+		t.Fatalf("working tree does not contain the deletion/destination reproduction:\n%s", status)
+	}
+
+	paths, err := repositoryPaths(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsRepositoryPath(paths, "old-path.txt") {
+		t.Fatalf("repositoryPaths() retained missing tracked deletion: %v", paths)
+	}
+	if !containsRepositoryPath(paths, "new-path.txt") {
+		t.Fatalf("repositoryPaths() omitted untracked rename destination: %v", paths)
+	}
+	if err := validateRepositoryPaths(root, paths); err != nil {
+		t.Fatalf("validateRepositoryPaths() rejected valid rename state: %v", err)
+	}
+}
+
+func TestRepositoryPathsFailsClosedWhenGitEnumerationFails(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "README.md", "not a Git repository\n")
+	if paths, err := repositoryPaths(root); err == nil || !strings.Contains(err.Error(), "git ls-files") {
+		t.Fatalf("repositoryPaths() = %v, %v; want Git enumeration error", paths, err)
+	}
+}
 
 func TestCheckTextDetectsPublicLeaksAndUnsafeSecrets(t *testing.T) {
 	config := projectconfig.Config{Profile: "ready"}
@@ -294,6 +332,26 @@ func writeRepositoryFixture(t *testing.T, root, relative, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func runGit(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
+}
+
+func containsRepositoryPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
 }
 
 func jsonSecretAssignment(name, value string) string {

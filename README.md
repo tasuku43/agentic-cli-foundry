@@ -62,6 +62,8 @@ For Codex, invoke [`$bootstrap-derived-cli`](.agents/skills/bootstrap-derived-cl
 
 The bootstrap changes repository identity; it does not invent the product. A derived project is not ready merely because all names were replaced. Its north star, supported tasks, trust boundaries, and release promises must be made specific before implementation expands.
 
+The stored bootstrap profile value `ready` means **identity-ready only**. A derived repository may deliberately retain the same GitHub owner or license as the template, but must replace its repository, Go module, binary, display name, Formula class, description, and security contact. Bootstrap status uses “identity ready” to avoid implying product completion.
+
 ## Run the default CLI
 
 ```sh
@@ -107,12 +109,18 @@ All entry points delegate to `./scripts/check.sh`:
 | Command | Purpose |
 |---|---|
 | `task check:fast` | Formatting, architecture, and focused tests for short feedback loops |
-| `task check` | The full pre-merge gate |
+| `task check` | The full pre-merge gate: fast, vet/race/tidy/diff, security, release, and public profiles |
 | `task security` | Credential, dependency, egress, and public-boundary checks |
 | `task release:check` | Packaging and release-contract checks |
 | `task public:check` | Public-readiness and template-sanitization checks |
 
 CI is the authority. Local hooks may run a faster profile, but they must call the same script rather than reimplementing policy.
+
+### Local gate prerequisites
+
+Install the exact Go version declared by `go.mod`, Git, `gofmt`, and [Task](https://taskfile.dev/). The gate deliberately sets `GOTOOLCHAIN=local`; select the exact installation in PATH instead of relying on automatic toolchain download. It validates the Go binary, reported version, `GOROOT`, `GOTOOLDIR`, and compiler before doing long work and prints one remediation block when installations are mixed.
+
+`task check` includes the complete security, release, and public profiles. It therefore also needs ShellCheck 0.9.0 or newer, Ruby, `tar`, `unzip`, either `sha256sum` or `shasum`, and network access or a pre-populated Go module cache for the pinned security/action-lint tools. The gate reports missing system tools at startup; it never skips a subprofile because a prerequisite is absent.
 
 ## Public template policy
 

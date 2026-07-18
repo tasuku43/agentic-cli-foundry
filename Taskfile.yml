@@ -55,6 +55,6 @@ tasks:
       - go run ./tools/bootstrap --dry-run
 
   bootstrap:
-    desc: Apply validated template substitutions and switch to the ready profile.
+    desc: Apply validated template substitutions and switch to identity-ready state.
     cmds:
       - go run ./tools/bootstrap

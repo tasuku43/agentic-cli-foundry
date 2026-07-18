@@ -55,6 +55,45 @@ func TestApplyPreviewsAndAppliesExactContentAndPathReplacements(t *testing.T) {
 	}
 }
 
+func TestHarnessBootstrapDocumentationUsesProtectedDefaultsConcept(t *testing.T) {
+	sourcePath := filepath.Join("..", "..", "docs", "04_harness.md")
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	start := strings.Index(text, "### `tools/bootstrap`")
+	if start < 0 {
+		t.Fatal("Harness bootstrap section is missing")
+	}
+	remainder := text[start+len("### `tools/bootstrap`"):]
+	end := strings.Index(remainder, "\n### ")
+	if end < 0 {
+		t.Fatal("Harness bootstrap section has no following section")
+	}
+	section := remainder[:end]
+	if !strings.Contains(section, "`projectconfig.Defaults`") {
+		t.Fatal("Harness bootstrap section does not name the protected provenance source")
+	}
+	for _, replaceable := range []string{
+		projectconfig.Defaults.Name,
+		projectconfig.Defaults.BinaryName,
+		projectconfig.Defaults.GoModule,
+		projectconfig.Defaults.GitHubOwner + "/" + projectconfig.Defaults.GitHubRepository,
+	} {
+		if strings.Contains(section, replaceable) {
+			t.Errorf("Harness bootstrap section contains replaceable identity %q", replaceable)
+		}
+	}
+
+	root := t.TempDir()
+	writeFixture(t, root, "docs/04_harness.md", section)
+	if _, _, err := apply(root, replacements(configuredFixture().Project), false); err != nil {
+		t.Fatal(err)
+	}
+	assertFileContents(t, filepath.Join(root, "docs", "04_harness.md"), section)
+}
+
 func TestApplyDoesNotRecursivelyReplaceTargetValues(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "go.mod", "module "+projectconfig.Defaults.GoModule+"\n")

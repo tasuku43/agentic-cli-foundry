@@ -85,7 +85,7 @@ func main() {
 		fmt.Printf("bootstrap dry-run: %d updates, %d renames\n", len(changed), len(renames))
 		return
 	}
-	fmt.Printf("bootstrap: ready (%d updates, %d renames)\n", len(changed), len(renames))
+	fmt.Printf("bootstrap: identity ready (%d updates, %d renames)\n", len(changed), len(renames))
 }
 
 func fatal(err error) {

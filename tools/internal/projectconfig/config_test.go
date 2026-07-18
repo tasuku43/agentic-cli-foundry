@@ -22,20 +22,63 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 }
 
 func TestReadyProblemsRequireProjectSpecificIdentity(t *testing.T) {
-	if got := ReadyProblems(Defaults); len(got) != 8 {
-		t.Fatalf("problems = %v", got)
+	wantTemplateProblems := []string{
+		"name still uses the runnable template default",
+		"binary_name still uses the runnable template default",
+		"go_module still uses the runnable template default",
+		"github_repository still uses the runnable template default",
+		"description still uses the runnable template default",
+		"formula_class still uses the runnable template default",
+		"security_contact still uses the runnable template default",
+	}
+	if got := ReadyProblems(Defaults); strings.Join(got, "\n") != strings.Join(wantTemplateProblems, "\n") {
+		t.Fatalf("problems = %v, want %v", got, wantTemplateProblems)
 	}
 	project := Defaults
 	project.Name = "Example Tool"
 	project.BinaryName = "example-tool"
-	project.GoModule = "github.com/acme/example-tool"
-	project.GitHubOwner = "acme"
+	project.GoModule = "github.com/" + Defaults.GitHubOwner + "/example-tool"
 	project.GitHubRepository = "example-tool"
 	project.Description = "An example command-line tool."
 	project.FormulaClass = "ExampleTool"
-	project.SecurityContact = "security@acme.example"
+	project.SecurityContact = "security@example.com"
 	if got := ReadyProblems(project); len(got) != 0 {
 		t.Fatalf("problems = %v", got)
+	}
+}
+
+func TestReadyProblemsRequireEachMeaningfulDerivedField(t *testing.T) {
+	project := Defaults
+	project.Name = "Example Tool"
+	project.BinaryName = "example-tool"
+	project.GoModule = "github.com/" + Defaults.GitHubOwner + "/example-tool"
+	project.GitHubRepository = "example-tool"
+	project.Description = "An example command-line tool."
+	project.FormulaClass = "ExampleTool"
+	project.SecurityContact = "security@example.com"
+
+	tests := []struct {
+		name    string
+		restore func(*Project)
+	}{
+		{name: "name", restore: func(p *Project) { p.Name = Defaults.Name }},
+		{name: "binary_name", restore: func(p *Project) { p.BinaryName = Defaults.BinaryName }},
+		{name: "go_module", restore: func(p *Project) { p.GoModule = Defaults.GoModule }},
+		{name: "github_repository", restore: func(p *Project) { p.GitHubRepository = Defaults.GitHubRepository }},
+		{name: "description", restore: func(p *Project) { p.Description = Defaults.Description }},
+		{name: "formula_class", restore: func(p *Project) { p.FormulaClass = Defaults.FormulaClass }},
+		{name: "security_contact", restore: func(p *Project) { p.SecurityContact = Defaults.SecurityContact }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := project
+			test.restore(&candidate)
+			got := ReadyProblems(candidate)
+			want := test.name + " still uses the runnable template default"
+			if len(got) != 1 || got[0] != want {
+				t.Fatalf("problems = %v, want [%q]", got, want)
+			}
+		})
 	}
 }
 

@@ -30,7 +30,7 @@ The template starts with runnable public defaults. In the derived repository:
 6. Rewrite theses, product, security, and release documents with project facts.
 7. Run `task check`, `task security`, and `task public:check` before the first public push.
 
-Bootstrap's `ready` profile means identity replacement succeeded. It does not mean the project has completed product, security, legal, or release review.
+Bootstrap's stored `ready` profile means identity replacement succeeded—treat it as identity-ready. It does not mean the project has completed product, security, legal, or release review. A derived repository may retain the template GitHub owner or license deliberately; its repository, module, binary, display identity, and other project-specific metadata must still change.
 
 Bootstrap is deliberately fail-closed:
 
@@ -39,6 +39,8 @@ Bootstrap is deliberately fail-closed:
 - identity updates and the transition to `profile: ready` are committed as one transaction;
 - an unexpected commit error triggers reverse-order rollback, and a rollback failure is reported explicitly rather than being hidden;
 - symbolic links are rejected anywhere in the traversed repository, even when their target appears to remain inside the repository.
+
+Bootstrap path renames do not require an intermediate stage or commit. Immediately after apply, repository guard ignores tracked sources already absent from the working tree and still inspects every untracked destination. Git enumeration failure, symbolic links, special files, and other inspection errors remain fatal, so this allowance does not replace Git's path set with an unchecked filesystem walk.
 
 A process or operating-system crash cannot make a multi-file filesystem update universally atomic. After any interrupted bootstrap, inspect the tree, rerun the dry-run, and restore from version control if the guard reports reserved bootstrap paths. Do not publish a repository merely because its profile says `ready`.
 

@@ -23,8 +23,9 @@ When `.harness/project.json` has `profile: template`, use
 adding a capability. It is the first-run Codex workflow: resolve the derived
 identity, preview and apply the repository bootstrap, verify the result, and
 make the first project-specific thesis and security decisions. Do not start
-`$add-capability` until bootstrap reports `profile: ready` and the generic
-product reasoning has been made concrete for the derived tool.
+`$add-capability` until bootstrap reports the identity-only stored value
+`profile: ready` and the generic product reasoning has been made concrete for
+the derived tool.
 
 ## Decision precedence
 

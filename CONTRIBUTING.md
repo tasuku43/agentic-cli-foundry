@@ -13,11 +13,13 @@ Thank you for improving Agentic CLI Foundry. Contributions are welcome when they
 
 ## Development setup
 
-Install the Go version declared by `go.mod` and [Task](https://taskfile.dev/). Then run:
+Install the exact Go version declared by `go.mod`, Git, `gofmt`, and [Task](https://taskfile.dev/). The canonical gate uses `GOTOOLCHAIN=local`, so the selected PATH, `GOROOT`, `GOTOOLDIR`, and compiler must all belong to that exact installation. Then run:
 
 ```sh
 task check:fast
 ```
+
+The required pre-merge `task check` also runs the complete security, release, and public profiles. Local execution needs ShellCheck 0.9.0 or newer, Ruby, `tar`, `unzip`, either `sha256sum` or `shasum`, plus network access or a pre-populated Go module cache for pinned Go-based linters. Preflight reports missing tools or a mixed Go installation before the long-running profiles begin. See [Harness](docs/04_harness.md) for the composition and diagnostic contract.
 
 The default repository must remain runnable as `github.com/tasuku43/agentic-cli-foundry` with the `agentic-cli-foundry` binary. Identity changes belong in a derived repository through the bootstrap workflow, not in a contribution to the reusable template.
 

@@ -26,8 +26,9 @@ go run ./tools/projectmeta --field profile
 ```
 
 - If it is `template`, continue.
-- If it is `ready`, do not rerun bootstrap or change the profile by hand. Report
-  that identity bootstrap has already completed and inspect existing metadata
+- If it is `ready`, do not rerun bootstrap or change the profile by hand. Treat
+  that stored value as identity-ready: report that identity bootstrap has
+  completed, not that product work is complete, and inspect existing metadata
   only if the user asked for verification.
 - For any other value, stop and report the validation error.
 
@@ -48,6 +49,11 @@ Read `.harness/project.json` and resolve every `project` field:
 - `license_spdx`: deliberate public license choice;
 - `security_contact`: public vulnerability-reporting address.
 
+The GitHub owner and license may deliberately match the template. The
+repository, Go module, binary, display name, description, Formula class, and
+security contact are project-specific and must not retain their runnable
+template defaults.
+
 Use an existing Git remote only as evidence. Do not invent an owner, license,
 security address, or publication destination. Ask one concise, grouped question
 when a material value cannot be inferred safely.
@@ -63,7 +69,8 @@ and copied private history. Keep synthetic examples public-safe.
 ## 3. Configure and preview
 
 Edit only `.harness/project.json` to set the resolved identity. Leave
-`profile` as `template`; the bootstrap tool owns the transition to `ready`.
+`profile` as `template`; the bootstrap tool owns the transition to the stored
+`ready` value, which means identity-ready only.
 
 Preview the complete transaction:
 
@@ -87,8 +94,8 @@ go run ./tools/bootstrap
 ```
 
 The operation plans all changes before writing and rolls back a failed commit.
-If it fails, report the exact error and inspect the tree. Do not claim readiness
-or force the profile.
+If it fails, report the exact error and inspect the tree. Do not claim identity
+readiness or force the profile.
 
 ## 5. Verify the mechanical result
 
@@ -107,7 +114,7 @@ git diff --check
 
 Require:
 
-- profile is `ready`;
+- stored profile is `ready` (identity-ready only);
 - `go.mod`, repository imports, `cmd/<binary_name>`, and the Formula template
   agree with `.harness/project.json`;
 - `gofmt -l .` prints nothing;
@@ -116,6 +123,10 @@ Require:
   `tools/internal/projectconfig/defaults.go`;
 - a second `go run ./tools/bootstrap --dry-run` is rejected as already
   bootstrapped.
+
+Run the gates before staging or committing the bootstrap diff. Repository guard
+must accept the tracked-deletion/untracked-destination state produced by a
+transactional path rename while continuing to inspect the destination.
 
 Treat `public` success as identity and repository-boundary evidence, not product
 or publication approval.

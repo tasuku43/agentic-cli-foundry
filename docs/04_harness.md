@@ -9,7 +9,7 @@ The harness is the executable counterpart of the theses, product contract, archi
 | Profile | Task alias | Intended use | Includes |
 |---|---|---|---|
 | `fast` | `task check:fast` | Short local feedback loop | Formatting, architecture checks, capability/schema contracts, focused unit and contract tests |
-| `full` | `task check` | Required pre-merge gate | Fast profile plus vet, race, generated-diff, and full test checks where applicable |
+| `full` | `task check` | Required pre-merge gate | Fast profile plus vet, race, tidy/diff checks, then the complete `security`, `release`, and `public` profiles |
 | `security` | `task security` | Security and dependency changes | Repository guard, module integrity, pinned static and vulnerability analysis |
 | `release` | `task release:check` | Packaging and release changes | Artifact, metadata, checksum, Formula, and workflow contracts |
 | `public` | `task public:check` | Bootstrap completion and public publication | Ready-profile identity, forbidden-data, required-file, license, capability/schema contracts, and public-boundary checks |
@@ -24,6 +24,10 @@ Direct invocation is supported for automation:
 ./scripts/check.sh public
 ```
 
+Every profile starts with a local-toolchain preflight after the gate sanitizes its Go environment. The preflight requires the exact Go version declared by `go.mod` under `GOTOOLCHAIN=local` and verifies the selected binary, its reported version, `GOVERSION`, `GOROOT`, `GOTOOLDIR`, and the compiler in that tool directory as one installation. A mismatch fails once with those values and remediation guidance before formatting, tests, downloads, or release builds begin.
+
+All profiles require Git, Go, and `gofmt`. Because `full` includes `security`, `release`, and `public`, a local `task check` also requires ShellCheck 0.9.0 or newer, Ruby, `tar`, `unzip`, and either `sha256sum` or `shasum`. Pinned Go security and action-lint tools must already exist in the module cache or be downloadable over the network. The `full`/`release` preflight reports missing system tools together before the long gate begins; network availability is documented rather than actively probed because a network probe would be nondeterministic and provider-specific.
+
 The canonical gate and release packager force module mode and neutralize ambient Go workspace, toolchain, experiment, FIPS, and flag settings before invoking Go. This prevents a local or CI `GOFLAGS` value from silently selecting no tests and keeps agent, developer, and workflow evidence on the same checked command set. A release fixture launches the public profile with hostile values and proves that its first Go-backed check observes only the sanitized contract.
 
 CI is the completion authority. A local hook may run `fast` to reduce latency, but it must call this script and must not claim equivalence to `full`. The Codex `Stop` hook resolves its script from the Git root so it also works from a subdirectory; after the user completes [Codex's project-hook trust review](https://learn.chatgpt.com/docs/hooks), a failed fast gate returns a structured `continue: false` result that tells the agent to repair and rerun the canonical command.
@@ -32,7 +36,7 @@ CI is the completion authority. A local hook may run `fast` to reduce latency, b
 
 ### `.harness/project.json`
 
-This file is the machine-readable source for template identity, bootstrap state, exact runnable defaults, and repository policy. The bootstrap tool validates it before replacement and changes its profile from `template` to `ready` only after successful application.
+This file is the machine-readable source for template identity, bootstrap state, exact runnable defaults, and repository policy. The bootstrap tool validates it before replacement and changes its profile from `template` to `ready` only after successful application. The stored word `ready` means identity-ready only; it does not assert product, security, legal, or release readiness.
 
 `binary_name` is a portable lowercase executable basename. Validation rejects the case-insensitive Windows device names `CON`, `AUX`, `PRN`, `NUL`, `COM1` through `COM9`, and `LPT1` through `LPT9`; adding `.exe` does not make those names extractable on Windows. This is part of the default release-matrix contract, not a naming-style preference.
 
@@ -40,7 +44,7 @@ Policy that must be reviewed by both humans and tools belongs here when it is fi
 
 ### `tools/bootstrap`
 
-Bootstrap performs validated exact replacement of `github.com/tasuku43/agentic-cli-foundry`, `agentic-cli-foundry`, and `Agentic CLI Foundry`. It does not search-and-guess arbitrary names.
+Bootstrap derives its validated exact replacement set from the protected provenance values in `projectconfig.Defaults`. It maps the runnable module, repository, binary, display identity, and associated project metadata to `.harness/project.json`; it does not search-and-guess arbitrary names. The defaults declaration itself is excluded from replacement so a derived repository can prove the source values.
 
 Always preview first:
 
@@ -49,13 +53,13 @@ go run ./tools/bootstrap --dry-run
 go run ./tools/bootstrap
 ```
 
-Bootstrap failure must leave the repository in a diagnosable state and must not claim the project is ready. Bootstrap changes identity; it cannot complete theses, threat models, or release promises.
+Bootstrap failure must leave the repository in a diagnosable state and must not claim identity readiness. Bootstrap changes identity; it cannot complete theses, threat models, or release promises. `ReadyProblems` therefore requires every runnable and user-facing derived field to change, while allowing a deliberate reuse of the GitHub owner or license.
 
 ### `.agents/skills/bootstrap-derived-cli`
 
 `$bootstrap-derived-cli` is the first-run Codex workflow for a derived repository. It does not implement a second replacement engine: it resolves missing identity decisions, invokes `tools/bootstrap` in preview-then-apply order, verifies the resulting module/import/command paths and gates, then requires a project-specific thesis and security handoff before `$add-capability`. `tools/repoguard` requires both the Skill instructions and their Codex interface metadata, while the Skill's workflow delegates mechanical safety to the same bootstrap and check commands used by humans and CI.
 
-The Skill deliberately leaves provider selection, OAuth versus PAT, credential storage, side-effect approval, user tasks, and release ownership to the derived project's theses and security model. A `ready` profile proves only that identity replacement completed.
+The Skill deliberately leaves provider selection, OAuth versus PAT, credential storage, side-effect approval, user tasks, and release ownership to the derived project's theses and security model. A `ready` profile proves only that identity replacement completed; treat it as identity-ready when communicating state.
 
 ### `tools/archlint`
 
@@ -65,7 +69,7 @@ The template also rejects every third-party import from `cmd` and `internal/cli`
 
 ### `tools/repoguard`
 
-Repository guard checks public-boundary and repository-shape policy, including bootstrap state, forbidden identifiers, likely secrets, invalid or leftover identity, and required public files. A derived project extends its policy when it adds credentials, private migrations, generated content, or publication constraints.
+Repository guard checks public-boundary and repository-shape policy, including bootstrap state, forbidden identifiers, likely secrets, invalid or leftover identity, and required public files. Its publishable path set comes from a successful Git enumeration. Tracked paths already absent from the working tree are omitted so an unstaged bootstrap rename is valid, while untracked destinations remain included. Git errors, symbolic links, special files, and other inspection errors still fail closed. A derived project extends its policy when it adds credentials, private migrations, generated content, or publication constraints.
 
 ### `tools/contractlint`
 
@@ -140,6 +144,9 @@ Every strong statement should identify its enforcement path.
 | Retry safety | Timeout/attempt/idempotency validation and adapter contract tests |
 | Agent recovery | Catalog fault declarations, exact-path/help-selector executable grammar tests, and structured error snapshots |
 | Bounded root discovery | Fixed root-index shape, 512-byte per-command entry validation, and 100-command growth/selection tests |
+| Meaningful derived identity | Field-level `ReadyProblems` tests that reject unchanged runnable/user-facing identity while allowing owner/license reuse, plus protected-defaults bootstrap tests |
+| Bootstrap working-tree paths | Temporary-Git deletion/untracked-destination regression, successful Git enumeration requirement, selected-path no-link/regular-file validation, and full shape scan |
+| Local Go consistency | Gate preflight comparison of required/reported/compiler versions and GOROOT/GOTOOLDIR, with a mixed-installation shell fixture |
 | External text structure | Visible-projection unit/E2E tests plus scoped I/O trust metadata; printable meaning remains explicitly out of scope |
 | Public capability coverage | Exact bidirectional match between capability ledger and catalog `CapabilityID` values |
 | External schema compatibility | Vendored fixture, generator, and drift test |

@@ -181,41 +181,35 @@ func checkLicense(root string, config projectconfig.Config, scope string) []issu
 func repositoryPaths(root string) ([]string, error) {
 	command := exec.Command("git", "ls-files", "-co", "--exclude-standard", "-z")
 	command.Dir = root
-	output, err := command.Output()
-	if err == nil {
-		var paths []string
-		for _, raw := range bytes.Split(output, []byte{0}) {
-			if len(raw) != 0 {
-				relative := string(raw)
-				if !filepath.IsLocal(relative) {
-					return nil, fmt.Errorf("git returned a non-local path %q", relative)
-				}
-				paths = append(paths, filepath.ToSlash(relative))
-			}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail != "" {
+			return nil, fmt.Errorf("git ls-files: %w: %s", err, detail)
 		}
-		sort.Strings(paths)
-		return paths, nil
+		return nil, fmt.Errorf("git ls-files: %w", err)
 	}
 	var paths []string
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	for _, raw := range bytes.Split(output, []byte{0}) {
+		if len(raw) == 0 {
+			continue
 		}
-		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "bin" || entry.Name() == "dist") {
-			return filepath.SkipDir
+		relative := string(raw)
+		if !filepath.IsLocal(relative) {
+			return nil, fmt.Errorf("git returned a non-local path %q", relative)
 		}
-		if entry.IsDir() {
-			return nil
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(relative))); err != nil {
+			if os.IsNotExist(err) {
+				// Git keeps tracked working-tree deletions in its cached path set.
+				// Bootstrap renames intentionally create that state before staging.
+				continue
+			}
+			return nil, fmt.Errorf("inspect git path %q: %w", relative, err)
 		}
 		paths = append(paths, filepath.ToSlash(relative))
-		return nil
-	})
+	}
 	sort.Strings(paths)
-	return paths, err
+	return paths, nil
 }
 
 // validateRepositoryPaths rejects links and special files before repoguard

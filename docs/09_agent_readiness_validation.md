@@ -97,6 +97,12 @@ go run ./cmd/agentic-cli-foundry --error-format json sample read --id smp_000000
 
 The root agent contract must be schema version 3 with `view: index`, reveal the `sample` namespace and both exact paths, and contain no input, output, authentication, error, mutation, or workflow detail. Its `scope_request` must identify the selector fields, exact invocation template, two-invocation unknown-outcome bound, and one-invocation known-path bound. The scoped contract must use `view: scope`, contain only the relevant list/read commands and their reference workflow, and provide the complete global and command contracts. Its `io_contract` must publish `external_text_trust: untrusted_data`, `external_text_projection: visible_escape`, and `opaque_reference_policy: validated_exact_bytes`. The `id` selected from the list JSON is field extraction, not identifier transformation: pass its exact string bytes to read. The final probe must fail as `not_found`, use the dedicated exit status, write no success data to stdout, and name `sample list` as the structured next action on stderr.
 
+### Scoped-help footprint evidence
+
+On the template catalog, the 2026-07-18 UTF-8 measurements are 1,517 bytes for root agent help, 5,359 bytes for exact `sample read` help, and 8,359 bytes for the `sample` namespace. These measurements are evidence, not yet a scoped contract budget. The existing 512-byte limit bounds each root selection entry, while scoped schema v3 deliberately repeats global error metadata and complete command-local contracts.
+
+A future scoped budget must not be implemented by deleting recovery or invocation facts. Evaluate a dictionary/code-reference representation and an explicit minimal-execution versus complete-contract split against a fixed derived-catalog corpus and tokenizer. The regression scenario must prove all four stages: discover an unknown outcome within two help calls; execute from exact typed inputs and effects; interpret fields, completeness, and opaque reference bytes; and recover from every classified fault through a structured next command. Only then set whole-response UTF-8 and token budgets and version the schema if its shape changes.
+
 Validation must also cover:
 
 - every list-emitted sample ID passed unchanged to read;

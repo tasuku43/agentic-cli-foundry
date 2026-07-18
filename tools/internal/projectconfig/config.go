@@ -169,6 +169,9 @@ func validateModule(module string) error {
 
 func ReadyProblems(project Project) []string {
 	var problems []string
+	// A derived repository may legitimately remain under the template owner and
+	// may deliberately retain its license. The fields below are the runnable and
+	// user-facing identity that bootstrap must actually replace.
 	checks := []struct {
 		name     string
 		value    string
@@ -177,7 +180,6 @@ func ReadyProblems(project Project) []string {
 		{"name", project.Name, Defaults.Name},
 		{"binary_name", project.BinaryName, Defaults.BinaryName},
 		{"go_module", project.GoModule, Defaults.GoModule},
-		{"github_owner", project.GitHubOwner, Defaults.GitHubOwner},
 		{"github_repository", project.GitHubRepository, Defaults.GitHubRepository},
 		{"description", project.Description, Defaults.Description},
 		{"formula_class", project.FormulaClass, Defaults.FormulaClass},

@@ -226,8 +226,8 @@ Run:
 ./scripts/check.sh security
 ```
 
-Before public release, also confirm `./scripts/check.sh public` passes with
-`profile: ready` in `.harness/project.json`.
+Before public release, also confirm `./scripts/check.sh public` passes with the
+stored identity-ready value `profile: ready` in `.harness/project.json`.
 
 ## 8. Validate the agent journey
 
