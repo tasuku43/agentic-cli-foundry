@@ -60,6 +60,7 @@ Each slice should remain reviewable and leave the repository buildable where pra
 - Opaque-reference and complete-pagination tests:
 - Structured output, hostile-output, and recovery tests:
 - Agent-readiness scenario and discovery-round-trip count:
+- Human-handoff scorecard for setup/authentication candidates:
 - Manual observation:
 - Required profiles:
 - Generated-diff or artifact checks:

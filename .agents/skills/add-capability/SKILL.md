@@ -211,6 +211,7 @@ Add the smallest set that proves the capability:
 - hostile-output tests for ESC/newline, bidi and zero-width format characters, U+2028/U+2029, pre-existing backslashes, JSON-looking and prompt-like printable data, oversized content, and writer failure;
 - tests proving structural escaping does not claim to filter semantic instructions and does not change an opaque reference;
 - regression fixtures for stable TSV/JSON output and structured error output.
+- for setup or authentication UX, a work-packet scorecard comparing environment exports, fixed-value re-entry, terminal/browser transfers, clipboard/OS dependencies, non-selecting discover/act trips, first-run and steady-state commands, and ceremonial inputs; retain steps justified by safety or certainty.
 
 Tests must use temporary directories, fixed clocks, fake credentials, and local
 test servers. They must not require a developer account or live network.

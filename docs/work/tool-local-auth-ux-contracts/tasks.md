@@ -16,24 +16,24 @@
 
 ## Implement
 
-- [ ] Promote durable documentation and Skill guidance.
-- [ ] Add fixed-target type, validation, help/JSON projection, and deep copy.
-- [ ] Add every requested negative catalog test and existing-workflow regression coverage.
-- [ ] Add non-secret configuration types and application resolver.
-- [ ] Add strict codec, atomic file store, status, fixtures, and filesystem tests.
-- [ ] Add human-handoff readiness scorecard and OAuth UX checklist.
+- [x] Promote durable documentation and Skill guidance.
+- [x] Add fixed-target type, validation, help/JSON projection, and deep copy.
+- [x] Add every requested negative catalog test and existing-workflow regression coverage.
+- [x] Add non-secret configuration types and application resolver.
+- [x] Add strict codec, atomic file store, status, fixtures, and filesystem tests.
+- [x] Add human-handoff readiness scorecard and OAuth UX checklist.
 
 ## Verify
 
-- [ ] Focused tests pass. Evidence:
-- [ ] `task check` passes. Evidence:
-- [ ] `task security` passes. Evidence:
-- [ ] `task public:check` passes. Evidence:
-- [ ] Repository status and commits are understood. Evidence:
+- [x] Focused tests pass. Evidence: `go test ./internal/domain/authn ./internal/app/authn ./internal/infra/authconfigfile ./internal/cli`
+- [x] `task check` passes. Evidence: Go 1.26.5, 2026-07-18.
+- [x] `task security` passes. Evidence: module verification, repoguard security, and govulncheck reported no vulnerabilities.
+- [x] `task public:check` passes. Evidence: repoguard public and contractlint succeeded.
+- [x] Repository status and commits are understood. Evidence: contract, fixed-target mechanism, and authentication configuration are separate commits; final evidence is a documentation-only commit.
 
 ## Hand off
 
-- [ ] Acceptance criteria have evidence.
-- [ ] Durable decisions were promoted out of the work packet.
-- [ ] Follow-up provider-specific choices remain explicit.
-- [ ] Summary explains outcome, checks, compatibility, and risks.
+- [x] Acceptance criteria have evidence.
+- [x] Durable decisions were promoted out of the work packet.
+- [x] Follow-up provider-specific choices remain explicit.
+- [x] Summary explains outcome, checks, compatibility, and risks.

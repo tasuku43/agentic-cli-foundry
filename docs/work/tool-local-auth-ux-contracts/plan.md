@@ -1,6 +1,6 @@
 # Work Plan: Generalize target binding and authentication setup contracts
 
-- Status: Accepted
+- Status: Implemented
 - Goal: [goal.md](goal.md)
 - Context: [context.md](context.md)
 

@@ -15,6 +15,20 @@ The target is:
 
 For each setup/authentication candidate, record required environment variables or exports, fixed values re-entered, terminal-to-browser transfers, browser-to-terminal transfers, clipboard or OS-integration dependencies, discover-to-act trips that do not contribute to target selection, first-run commands, steady-state commands, and ceremonial inputs that add no target certainty. These values compare candidates; they are not a scalar optimization target. A handoff may be justified when it materially improves safety, explicit consent, or agent certainty.
 
+Use this scorecard in the active work packet for every credible candidate:
+
+| Measure | Candidate value | Safety/certainty reason |
+|---|---:|---|
+| Required environment variables or exports |  |  |
+| Fixed values re-entered |  |  |
+| Terminal-to-browser transfers |  |  |
+| Browser-to-terminal transfers |  |  |
+| Clipboard or OS-integration dependencies |  |  |
+| Non-selecting discover-to-act trips |  |  |
+| First-run commands |  |  |
+| Steady-state commands |  |  |
+| Ceremonial inputs with no target certainty |  |  |
+
 ## Contract-level validation method
 
 For each derived command, verify all four stages.

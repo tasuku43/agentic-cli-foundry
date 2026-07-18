@@ -44,6 +44,7 @@ Use checkboxes for atomic work and add evidence after completion. This file trac
 - [ ] `task release:check` passes when required. Evidence:
 - [ ] Runtime-only behavior was observed on the required platform. Evidence:
 - [ ] The relevant agent-readiness scenario met its discovery-round-trip budget. Evidence:
+- [ ] Setup/authentication candidates have a human-handoff scorecard and safety/certainty rationale. Evidence:
 - [ ] Generated diff and repository status are understood. Evidence:
 
 ## Hand off

@@ -1,6 +1,6 @@
 # Work Goal: Generalize target binding and authentication setup contracts
 
-- Status: Accepted
+- Status: Complete
 - Owner: repository maintainers
 - Target: template feedback from a derived authentication CLI
 - Related ADRs: [ADR 0001](../../decisions/0001-oauth-library-boundary.md)
@@ -22,13 +22,13 @@ A real derived authentication design exposed three template gaps: the universal 
 
 ## Acceptance criteria
 
-- [ ] `AgentContract` represents one validated `tool_local` fixed target and scoped agent help publishes its stable kind, ID, scope, and description.
-- [ ] Catalog validation rejects incomplete, role-inconsistent, reference-bearing, or mutation-inconsistent fixed-target declarations.
-- [ ] Existing reference-bound action and mutation validation remains covered by regression tests.
-- [ ] Provider-neutral, schema-versioned non-secret authentication configuration has bounded strict decoding, fail-closed resolution, atomic file replacement, file-safety checks, and read-only status.
-- [ ] Authentication and security guidance separates public user configuration from credentials and records safe OAuth browser/callback extension points.
-- [ ] Agent-readiness records human handoffs and ceremonial inputs as comparison evidence.
-- [ ] `task check`, `task security`, and `task public:check` pass.
+- [x] `AgentContract` represents one validated `tool_local` fixed target and scoped agent help publishes its stable kind, ID, scope, and description.
+- [x] Catalog validation rejects incomplete, role-inconsistent, reference-bearing, or mutation-inconsistent fixed-target declarations.
+- [x] Existing reference-bound action and mutation validation remains covered by regression tests.
+- [x] Provider-neutral, schema-versioned non-secret authentication configuration has bounded strict decoding, fail-closed resolution, atomic file replacement, file-safety checks, and read-only status.
+- [x] Authentication and security guidance separates public user configuration from credentials and records safe OAuth browser/callback extension points.
+- [x] Agent-readiness records human handoffs and ceremonial inputs as comparison evidence.
+- [x] `task check`, `task security`, and `task public:check` pass.
 
 ## Governing documents
 
