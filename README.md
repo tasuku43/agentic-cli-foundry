@@ -17,7 +17,7 @@ The bootstrap tool replaces those exact defaults with validated project values. 
 - Explicit utility, discover, and act roles with opaque IDs passed unchanged between tasks.
 - Pure domain rules, application use cases, infrastructure adapters, and a thin CLI composition root.
 - Explicit `read`, `create`, and `write` effects with typed intent, target, and impact information.
-- Structured command prerequisites, inputs, outputs, completeness, failures, and recovery actions for agents.
+- Structured command prerequisites, inputs, outputs, delivery, collection coverage, failures, and recovery actions for agents.
 - Policy-neutral foundations for OAuth/PAT, pagination, timeout, retry/idempotency, and mutations that derived projects make concrete.
 - A single command catalog as the source of truth for routing and help.
 - Executable architectural, security, release, and public-repository claims.
@@ -78,7 +78,7 @@ go run ./cmd/agentic-cli-foundry --error-format json sample read --id <sample-id
 
 The default `doctor` task is a minimal utility slice through the domain, application, infrastructure, and CLI layers. The synthetic `sample list` and `sample read --id` pair demonstrates discover-to-act composition: copy the lowercase `id` emitted by `sample list` unchanged into `sample read`. Keep these examples as references while adding the first real capability, then remove or rename them only when the replacement has equivalent architectural and catalog tests.
 
-`doctor`, `sample list`, and `sample read` default to stable TSV and also support versioned JSON. The list result contains only `id` and `name`; read adds `content`. Success data is written to stdout only after the complete result has been bounded and rendered. Failures go to stderr as stable text or schema-versioned JSON and distinguish invalid input, authentication, permission, missing or ambiguous targets, rate limits, temporary failures, policy rejection, cancellation, unsupported work, contract violations, and internal faults with dedicated exit statuses. Schema-v3 root agent help is a compact outcome/capability index whose machine-readable `scope_request` points to exact-command or namespace help. Only that scoped response returns the complete I/O, output, error, role, prerequisite, authentication, mutation, and reference-flow contracts, so catalog growth does not duplicate them at the root.
+`doctor`, `sample list`, and `sample read` default to stable TSV and also support versioned JSON. The list result contains only `id` and `name`; read adds `content`. Success data is written to stdout only after complete delivery has been bounded and rendered; collection coverage is declared separately so a bounded window cannot look exhaustive. Failures go to stderr as stable text or schema-versioned JSON and distinguish invalid input, authentication, permission, missing or ambiguous targets, rate limits, temporary failures, policy rejection, cancellation, unsupported work, contract violations, and internal faults with dedicated exit statuses. Schema-5 root agent help is a compact outcome/capability index whose machine-readable `scope_request` points to exact-command or namespace help. Only that scoped response returns the complete I/O, output, error, role, prerequisite, authentication, mutation, and grouped reference-workflow contracts, so catalog growth does not duplicate them at the root or expand every producer/consumer pair.
 
 ## Repository map
 

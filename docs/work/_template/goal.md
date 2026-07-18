@@ -1,6 +1,7 @@
 # Work Goal: Short outcome
 
 - Status: Draft
+- Successor: None
 - Owner: Name or role
 - Target: Issue, milestone, or date
 - Related ADRs: None
@@ -12,6 +13,11 @@ State the user or maintainer result in one paragraph. Describe the state after c
 ## Why now
 
 Record the evidence, failure, request, or risk that makes this work valuable now.
+
+For a significant default presentation change, copy
+`docs/work/_template/presentation-evidence.md` into the active packet. For a
+capability removal or replacement, copy
+`docs/work/_template/capability-retirement.md`.
 
 ## Non-goals
 

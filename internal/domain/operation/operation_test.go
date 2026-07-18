@@ -24,6 +24,187 @@ func TestEffectZeroValueFailsClosed(t *testing.T) {
 	}
 }
 
+func TestSemanticEnumsRoundTripThroughTextAndJSON(t *testing.T) {
+	t.Run("effect", func(t *testing.T) {
+		for _, value := range []Effect{EffectRead, EffectCreate, EffectWrite} {
+			text, err := value.MarshalText()
+			if err != nil {
+				t.Fatalf("MarshalText(%v) error = %v", value, err)
+			}
+			var decodedText Effect
+			if err := decodedText.UnmarshalText(text); err != nil {
+				t.Fatalf("UnmarshalText(%q) error = %v", text, err)
+			}
+			if decodedText != value {
+				t.Fatalf("text round trip = %v, want %v", decodedText, value)
+			}
+
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatalf("json.Marshal(%v) error = %v", value, err)
+			}
+			var decodedJSON Effect
+			if err := json.Unmarshal(data, &decodedJSON); err != nil {
+				t.Fatalf("json.Unmarshal(%s) error = %v", data, err)
+			}
+			if decodedJSON != value {
+				t.Fatalf("JSON round trip = %v, want %v", decodedJSON, value)
+			}
+		}
+	})
+
+	t.Run("cardinality", func(t *testing.T) {
+		for _, value := range []Cardinality{CardinalityOne, CardinalityMany, CardinalityUnbounded} {
+			text, err := value.MarshalText()
+			if err != nil {
+				t.Fatalf("MarshalText(%v) error = %v", value, err)
+			}
+			var decodedText Cardinality
+			if err := decodedText.UnmarshalText(text); err != nil {
+				t.Fatalf("UnmarshalText(%q) error = %v", text, err)
+			}
+			if decodedText != value {
+				t.Fatalf("text round trip = %v, want %v", decodedText, value)
+			}
+
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatalf("json.Marshal(%v) error = %v", value, err)
+			}
+			var decodedJSON Cardinality
+			if err := json.Unmarshal(data, &decodedJSON); err != nil {
+				t.Fatalf("json.Unmarshal(%s) error = %v", data, err)
+			}
+			if decodedJSON != value {
+				t.Fatalf("JSON round trip = %v, want %v", decodedJSON, value)
+			}
+		}
+	})
+
+	t.Run("declaration", func(t *testing.T) {
+		for _, value := range []Declaration{DeclarationNo, DeclarationYes} {
+			text, err := value.MarshalText()
+			if err != nil {
+				t.Fatalf("MarshalText(%v) error = %v", value, err)
+			}
+			var decodedText Declaration
+			if err := decodedText.UnmarshalText(text); err != nil {
+				t.Fatalf("UnmarshalText(%q) error = %v", text, err)
+			}
+			if decodedText != value {
+				t.Fatalf("text round trip = %v, want %v", decodedText, value)
+			}
+
+			data, err := json.Marshal(value)
+			if err != nil {
+				t.Fatalf("json.Marshal(%v) error = %v", value, err)
+			}
+			var decodedJSON Declaration
+			if err := json.Unmarshal(data, &decodedJSON); err != nil {
+				t.Fatalf("json.Unmarshal(%s) error = %v", data, err)
+			}
+			if decodedJSON != value {
+				t.Fatalf("JSON round trip = %v, want %v", decodedJSON, value)
+			}
+		}
+	})
+}
+
+func TestSemanticEnumUnmarshalRejectsMalformedValuesWithoutMutation(t *testing.T) {
+	t.Run("effect", func(t *testing.T) {
+		for _, malformed := range []string{"", "unknown", "Read", " read", "read ", "1"} {
+			got := EffectCreate
+			if err := got.UnmarshalText([]byte(malformed)); err == nil {
+				t.Fatalf("UnmarshalText(%q) succeeded", malformed)
+			}
+			if got != EffectCreate {
+				t.Fatalf("UnmarshalText(%q) changed receiver to %v", malformed, got)
+			}
+		}
+		for _, malformed := range []string{
+			`null`, `1`, `true`, `{}`, `[]`, `"unknown"`, `"Read"`, `" read"`, `"read "`,
+		} {
+			got := EffectCreate
+			if err := json.Unmarshal([]byte(malformed), &got); err == nil {
+				t.Fatalf("json.Unmarshal(%s) succeeded", malformed)
+			}
+			if got != EffectCreate {
+				t.Fatalf("json.Unmarshal(%s) changed receiver to %v", malformed, got)
+			}
+		}
+	})
+
+	t.Run("cardinality", func(t *testing.T) {
+		for _, malformed := range []string{"", "unknown", "One", " one", "one ", "1"} {
+			got := CardinalityMany
+			if err := got.UnmarshalText([]byte(malformed)); err == nil {
+				t.Fatalf("UnmarshalText(%q) succeeded", malformed)
+			}
+			if got != CardinalityMany {
+				t.Fatalf("UnmarshalText(%q) changed receiver to %v", malformed, got)
+			}
+		}
+		for _, malformed := range []string{
+			`null`, `1`, `true`, `{}`, `[]`, `"unknown"`, `"One"`, `" one"`, `"one "`,
+		} {
+			got := CardinalityMany
+			if err := json.Unmarshal([]byte(malformed), &got); err == nil {
+				t.Fatalf("json.Unmarshal(%s) succeeded", malformed)
+			}
+			if got != CardinalityMany {
+				t.Fatalf("json.Unmarshal(%s) changed receiver to %v", malformed, got)
+			}
+		}
+	})
+
+	t.Run("declaration", func(t *testing.T) {
+		for _, malformed := range []string{"", "unknown", "Yes", " yes", "yes ", "true"} {
+			got := DeclarationNo
+			if err := got.UnmarshalText([]byte(malformed)); err == nil {
+				t.Fatalf("UnmarshalText(%q) succeeded", malformed)
+			}
+			if got != DeclarationNo {
+				t.Fatalf("UnmarshalText(%q) changed receiver to %v", malformed, got)
+			}
+		}
+		for _, malformed := range []string{
+			`null`, `1`, `true`, `{}`, `[]`, `"unknown"`, `"Yes"`, `" yes"`, `"yes "`,
+		} {
+			got := DeclarationNo
+			if err := json.Unmarshal([]byte(malformed), &got); err == nil {
+				t.Fatalf("json.Unmarshal(%s) succeeded", malformed)
+			}
+			if got != DeclarationNo {
+				t.Fatalf("json.Unmarshal(%s) changed receiver to %v", malformed, got)
+			}
+		}
+	})
+}
+
+func TestSemanticEnumUnmarshalRejectsNilReceivers(t *testing.T) {
+	var effect *Effect
+	if err := effect.UnmarshalText([]byte("read")); err == nil {
+		t.Fatal("nil Effect receiver accepted text")
+	}
+	if err := effect.UnmarshalJSON([]byte(`"read"`)); err == nil {
+		t.Fatal("nil Effect receiver accepted JSON")
+	}
+	var cardinality *Cardinality
+	if err := cardinality.UnmarshalText([]byte("one")); err == nil {
+		t.Fatal("nil Cardinality receiver accepted text")
+	}
+	if err := cardinality.UnmarshalJSON([]byte(`"one"`)); err == nil {
+		t.Fatal("nil Cardinality receiver accepted JSON")
+	}
+	var declaration *Declaration
+	if err := declaration.UnmarshalText([]byte("no")); err == nil {
+		t.Fatal("nil Declaration receiver accepted text")
+	}
+	if err := declaration.UnmarshalJSON([]byte(`"no"`)); err == nil {
+		t.Fatal("nil Declaration receiver accepted JSON")
+	}
+}
+
 func TestIntentValidatesEffectSpecificTargets(t *testing.T) {
 	tests := []struct {
 		name    string

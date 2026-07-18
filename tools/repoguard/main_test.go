@@ -174,6 +174,285 @@ func TestValidateRepositoryPathsRejectsSymbolicDirectoryComponents(t *testing.T)
 	}
 }
 
+func TestCheckWorkPacketsAcceptsLifecycleStatuses(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "docs/work/draft/goal.md", workGoal("Draft", "", "- [ ] Pending\n"))
+	writeRepositoryFixture(t, root, "docs/work/accepted/goal.md", workGoal("Accepted", "", "- [ ] Approved but not active\n"))
+	writeRepositoryFixture(t, root, "docs/work/active/goal.md", workGoal("Active", "", "- [ ] In progress\n"))
+	completeGoal := strings.Replace(workGoal("Complete", "", "- [x] Proven <!-- - [ ] Inline example only -->\n\n```md\n+ [ ] Fenced example only\n```\n"), "## Acceptance criteria", "## Acceptance criteria <!-- inline heading comment -->", 1)
+	writeRepositoryFixture(t, root, "docs/work/complete/goal.md", completeGoal)
+	writeRepositoryFixture(t, root, "docs/work/complete/tasks.md", "# Tasks\n\n* [x] Done\n10. [x] Document an example\n\n    ```md\n    - [ ] Nested fenced example only\n    ```\n")
+	writeRepositoryFixture(t, root, "docs/work/replacement/goal.md", workGoal("Draft", "", "- [ ] Replacement\n"))
+	writeRepositoryFixture(t, root, "docs/work/old/goal.md", workGoal("Superseded", "../replacement/goal.md", "- [ ] Historical\n")+"\n- Successor: ../body-fake/goal.md\n")
+	paths := []string{
+		"docs/work/accepted/goal.md",
+		"docs/work/active/goal.md",
+		"docs/work/complete/goal.md",
+		"docs/work/complete/tasks.md",
+		"docs/work/draft/goal.md",
+		"docs/work/old/goal.md",
+		"docs/work/replacement/goal.md",
+	}
+	issues, err := checkWorkPackets(root, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("valid work packet issues = %#v", issues)
+	}
+}
+
+func TestCheckWorkPacketsReadsMetadataOnlyFromFirstH1HeaderBlock(t *testing.T) {
+	root := t.TempDir()
+	valid := "```md\n# Fake work goal\n- Status: Paused\n```\n\n# Work Goal\n\n- Status: Draft\n- Successor: None\n\n## Outcome\n\n- Status: Paused\n- Successor: ../body-fake/goal.md\n\n## Acceptance criteria\n\n- [ ] Pending\n"
+	writeRepositoryFixture(t, root, "docs/work/valid/goal.md", valid)
+	hidden := "# Work Goal\n\n<!--\n- Status: Draft\n- Successor: None\n-->\n\n## Acceptance criteria\n\n- [ ] Pending\n"
+	writeRepositoryFixture(t, root, "docs/work/hidden/goal.md", hidden)
+	detached := "# Work Goal\n\nIntro before metadata.\n\n- Status: Draft\n\n## Acceptance criteria\n\n- [ ] Pending\n"
+	writeRepositoryFixture(t, root, "docs/work/detached/goal.md", detached)
+
+	issues, err := checkWorkPackets(root, []string{
+		"docs/work/detached/goal.md",
+		"docs/work/hidden/goal.md",
+		"docs/work/valid/goal.md",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("metadata boundary issues = %#v", issues)
+	}
+	for _, item := range issues {
+		if item.Path == "docs/work/valid/goal.md" || !strings.Contains(item.Message, "exactly one Status") {
+			t.Errorf("unexpected metadata issue = %#v", item)
+		}
+	}
+}
+
+func TestCheckWorkPacketsDoesNotTreatUnicodeWhitespaceAsMetadataSeparation(t *testing.T) {
+	root := t.TempDir()
+	goal := "# Work Goal\n\n\u00a0\n- Status: Complete\n\n## Acceptance criteria\n\n- [x] Hidden behind a nonblank paragraph\n"
+	writeRepositoryFixture(t, root, "docs/work/unicode-metadata/goal.md", goal)
+	issues, err := checkWorkPackets(root, []string{"docs/work/unicode-metadata/goal.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "exactly one Status") {
+		t.Fatalf("Unicode metadata issues = %#v", issues)
+	}
+}
+
+func TestCheckWorkPacketsRejectsCompletionMarkersHiddenInHTMLComments(t *testing.T) {
+	root := t.TempDir()
+	goal := "# Work Goal\n\n- Status: Complete\n\n<!--\n## Acceptance criteria\n- [x] Hidden acceptance\n-->\n<!-- inline prefix -->## Acceptance criteria\n<!-- inline prefix -->- [x] Hidden acceptance\n\n## Completion definition\n"
+	writeRepositoryFixture(t, root, "docs/work/hidden/goal.md", goal)
+	writeRepositoryFixture(t, root, "docs/work/hidden/tasks.md", "# Tasks\n\n<!-- - [x] Hidden task -->\n<!-- inline prefix -->- [x] Hidden task\n")
+	issues, err := checkWorkPackets(root, []string{"docs/work/hidden/goal.md", "docs/work/hidden/tasks.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := workIssueMessages(issues)
+	for _, want := range []string{"must contain acceptance criteria checkboxes", "tasks.md must contain task checkboxes"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("issues do not contain %q: %#v", want, issues)
+		}
+	}
+}
+
+func TestCheckWorkPacketsDoesNotStartCommentsFromCodeOrEscapedLiterals(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "docs/work/comment-literals/goal.md", workGoal("Complete", "", "- [x] Proven\n"))
+	tasks := "# Tasks\n\n- [x] Explain literal `<!--`\n- [x] Explain escaped \\<!--\n- [x] Explain multiline `literal\n  <!--`\n\nTop-level indented example follows.\n\n    <!--\n- [ ] Pending visible task\n"
+	writeRepositoryFixture(t, root, "docs/work/comment-literals/tasks.md", tasks)
+	issues, err := checkWorkPackets(root, []string{
+		"docs/work/comment-literals/goal.md",
+		"docs/work/comment-literals/tasks.md",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0].Line != 11 || !strings.Contains(issues[0].Message, "unchecked task") {
+		t.Fatalf("literal comment issues = %#v", issues)
+	}
+}
+
+func TestCheckWorkPacketsDoesNotTreatUnicodeWhitespaceAsFenceClose(t *testing.T) {
+	root := t.TempDir()
+	acceptance := "- [x] Proven\n\n```md\n```\u00a0\n- [x] Hidden checked example\n```\n- [ ] Real unchecked acceptance\n"
+	writeRepositoryFixture(t, root, "docs/work/unicode-fence/goal.md", workGoal("Complete", "", acceptance))
+	writeRepositoryFixture(t, root, "docs/work/unicode-fence/tasks.md", "# Tasks\n\n- [x] Done\n")
+	issues, err := checkWorkPackets(root, []string{"docs/work/unicode-fence/goal.md", "docs/work/unicode-fence/tasks.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "unchecked acceptance criterion") {
+		t.Fatalf("Unicode fence issues = %#v", issues)
+	}
+}
+
+func TestCheckWorkPacketsUsesCommonMarkTabColumnsForListsAndFences(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "docs/work/tab-columns/goal.md", workGoal("Complete", "", "- [x] Proven\n"))
+	tasks := "# Tasks\n\n- [x] Done\n-\t[ ] Tab-separated task\n\n10. [x] Document fenced example\n\n    ```md\n    example\n\t```\n- [ ] Visible after tab-indented close\n"
+	writeRepositoryFixture(t, root, "docs/work/tab-columns/tasks.md", tasks)
+	issues, err := checkWorkPackets(root, []string{
+		"docs/work/tab-columns/goal.md",
+		"docs/work/tab-columns/tasks.md",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 2 || issues[0].Line != 4 || issues[1].Line != 11 {
+		t.Fatalf("tab-column issues = %#v", issues)
+	}
+	for _, item := range issues {
+		if !strings.Contains(item.Message, "unchecked task") {
+			t.Errorf("unexpected tab-column issue = %#v", item)
+		}
+	}
+}
+
+func TestCheckWorkPacketsNormalizesTabsRelativeToListContainerForFences(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "docs/work/relative-tab/goal.md", workGoal("Complete", "", "- [x] Proven\n"))
+	tasks := "# Tasks\n\n- Example:\n\n  \t```md\n  \t- [x] Fenced example only\n  \t```\n"
+	writeRepositoryFixture(t, root, "docs/work/relative-tab/tasks.md", tasks)
+	issues, err := checkWorkPackets(root, []string{
+		"docs/work/relative-tab/goal.md",
+		"docs/work/relative-tab/tasks.md",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "tasks.md must contain task checkboxes") {
+		t.Fatalf("relative-tab fence issues = %#v", issues)
+	}
+}
+
+func TestCheckWorkPacketsRejectsUnknownAndInconsistentCompleteState(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "docs/work/unknown/goal.md", workGoal("Paused", "", "- [x] Done\n"))
+	writeRepositoryFixture(t, root, "docs/work/incomplete/goal.md", workGoal("Complete", "", "- [ ] Acceptance remains\n"))
+	writeRepositoryFixture(t, root, "docs/work/incomplete/tasks.md", "# Tasks\n\n- [x] Done\n+ [ ] Still open\n1) [ ] Ordered work\n\nTop-level example follows.\n\n    ```\n* [ ] Must not be hidden by an indented pseudo-fence\n")
+	paths := []string{
+		"docs/work/incomplete/goal.md",
+		"docs/work/incomplete/tasks.md",
+		"docs/work/unknown/goal.md",
+	}
+	issues, err := checkWorkPackets(root, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := workIssueMessages(issues)
+	for _, want := range []string{"unchecked acceptance criterion", "unchecked task", "Draft, Accepted, Active, Complete, or Superseded"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("issues do not contain %q: %#v", want, issues)
+		}
+	}
+	pseudoFenceItemFound := false
+	for _, item := range issues {
+		if item.Path == "docs/work/incomplete/tasks.md" && item.Line == 10 && strings.Contains(item.Message, "unchecked task") {
+			pseudoFenceItemFound = true
+		}
+	}
+	if !pseudoFenceItemFound {
+		t.Errorf("top-level four-space pseudo-fence hid its following task: %#v", issues)
+	}
+}
+
+func TestCheckWorkPacketsChecksEveryVisibleAcceptanceSection(t *testing.T) {
+	root := t.TempDir()
+	goal := workGoal("Complete", "", "- [x] First acceptance\n") + "\n## Notes\n\nVisible notes.\n\n## Acceptance criteria\n\n- [ ] Later acceptance remains\n"
+	writeRepositoryFixture(t, root, "docs/work/repeated-acceptance/goal.md", goal)
+	writeRepositoryFixture(t, root, "docs/work/repeated-acceptance/tasks.md", "# Tasks\n\n- [x] Done\n")
+	issues, err := checkWorkPackets(root, []string{
+		"docs/work/repeated-acceptance/goal.md",
+		"docs/work/repeated-acceptance/tasks.md",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "unchecked acceptance criterion") {
+		t.Fatalf("repeated acceptance issues = %#v", issues)
+	}
+}
+
+func TestCheckWorkPacketsRejectsTemplateSuccessorsAndCycles(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "docs/work/_template/goal.md", workGoal("Draft", "", "- [ ] Template\n"))
+	writeRepositoryFixture(t, root, "docs/work/template-target/goal.md", workGoal("Superseded", "../_template/goal.md", "- [x] Historical\n"))
+	writeRepositoryFixture(t, root, "docs/work/cycle-a/goal.md", workGoal("Superseded", "../cycle-b/goal.md", "- [x] Historical\n"))
+	writeRepositoryFixture(t, root, "docs/work/cycle-b/goal.md", workGoal("Superseded", "../cycle-a/goal.md", "- [x] Historical\n"))
+	paths := []string{
+		"docs/work/_template/goal.md",
+		"docs/work/cycle-a/goal.md",
+		"docs/work/cycle-b/goal.md",
+		"docs/work/template-target/goal.md",
+	}
+	issues, err := checkWorkPackets(root, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := workIssueMessages(issues)
+	for _, want := range []string{"non-template", "contains a cycle"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("issues do not contain %q: %#v", want, issues)
+		}
+	}
+}
+
+func TestCheckWorkPacketsRequiresExplicitRegularSupersedingGoal(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "docs/work/missing/goal.md", workGoal("Superseded", "None", "- [x] Historical\n"))
+	writeRepositoryFixture(t, root, "docs/work/broken/goal.md", workGoal("Superseded", "../absent/goal.md", "- [x] Historical\n"))
+	paths := []string{"docs/work/broken/goal.md", "docs/work/missing/goal.md"}
+	issues, err := checkWorkPackets(root, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := workIssueMessages(issues)
+	for _, want := range []string{"explicit Successor path", "is not a repository work goal"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("issues do not contain %q: %#v", want, issues)
+		}
+	}
+
+	external := filepath.Join(t.TempDir(), "goal.md")
+	if err := os.WriteFile(external, []byte(workGoal("Draft", "", "- [ ] External\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := filepath.Join(root, "docs", "work", "linked", "goal.md")
+	if err := os.MkdirAll(filepath.Dir(linked), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, linked); err != nil {
+		t.Skipf("symbolic links are unavailable: %v", err)
+	}
+	if _, err := checkWorkPackets(root, []string{"docs/work/linked/goal.md"}); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("symlink work packet error = %v", err)
+	}
+}
+
+func TestCheckWorkPacketsRejectsMarkdownSuccessorSyntax(t *testing.T) {
+	root := t.TempDir()
+	writeRepositoryFixture(t, root, "docs/work/replacement/goal.md", workGoal("Draft", "", "- [ ] Replacement\n"))
+	writeRepositoryFixture(t, root, "docs/work/linked/goal.md", workGoal("Superseded", "[replacement](../replacement/goal.md)", "- [x] Historical\n"))
+	writeRepositoryFixture(t, root, "docs/work/unicode/goal.md", workGoal("Superseded", "../replacement/goal.md\u00a0", "- [x] Historical\n"))
+	paths := []string{"docs/work/linked/goal.md", "docs/work/replacement/goal.md", "docs/work/unicode/goal.md"}
+	issues, err := checkWorkPackets(root, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("Markdown successor issues = %#v", issues)
+	}
+	for _, item := range issues {
+		if !strings.Contains(item.Message, "canonical") {
+			t.Errorf("unexpected successor issue = %#v", item)
+		}
+	}
+}
+
 func TestCheckTextAllowsDocumentedExamplesAndReleasePlaceholders(t *testing.T) {
 	config := projectconfig.Config{Profile: "template"}
 	if issues := checkText("example.env", "api_key=dummy-value", config, nil, "security"); len(issues) != 0 {
@@ -332,6 +611,22 @@ func writeRepositoryFixture(t *testing.T, root, relative, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func workGoal(status, successor, acceptance string) string {
+	metadata := "- Status: " + status + "\n"
+	if successor != "" {
+		metadata += "- Successor: " + successor + "\n"
+	}
+	return "# Work Goal\n\n" + metadata + "\n## Acceptance criteria\n\n" + acceptance + "\n## Completion definition\n"
+}
+
+func workIssueMessages(issues []issue) string {
+	values := make([]string, len(issues))
+	for index, item := range issues {
+		values[index] = item.Message
+	}
+	return strings.Join(values, "\n")
 }
 
 func runGit(t *testing.T, root string, args ...string) string {

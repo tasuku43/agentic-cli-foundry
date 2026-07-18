@@ -3,6 +3,7 @@
 - Status: Proposed
 - Goal: [goal.md](goal.md)
 - Context: [context.md](context.md)
+- Tasks: [tasks.md](tasks.md)
 
 ## Chosen approach
 
@@ -22,7 +23,11 @@ Explain a meaningfully different trade-off. Remove this section if there is no c
 
 ### Public contract
 
-Describe the user outcome, capability-ledger status, commands, utility/discover/act roles, produced or consumed opaque references, input sources, output fields/types/completeness, prerequisites, authentication requirement, structured failures and next actions, effects, exit behavior, compatibility, and non-goals.
+Describe the user outcome, capability-ledger status, commands,
+utility/discover/act roles, produced or consumed opaque references, input
+sources, output fields/types, delivery, collection coverage, prerequisites,
+authentication requirement, structured failures and next actions, effects, exit
+behavior, compatibility, and non-goals.
 
 ### Layer changes
 
@@ -68,6 +73,11 @@ Each slice should remain reviewable and leave the repository buildable where pra
 ## Rollout and rollback
 
 Describe migration, feature exposure, state compatibility, and safe rollback. Write “not applicable” with a reason only when no external state or public contract changes.
+
+When removing or replacing a capability, also record catalog/fault/recovery
+removal, dependency ownership, dormant fallbacks, and the explicit disposition
+of persisted secret and non-secret state in a copied
+`capability-retirement.md`.
 
 ## Documentation promotion
 

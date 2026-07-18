@@ -2,6 +2,7 @@
 package operation
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode"
@@ -38,6 +39,41 @@ func (e Effect) MarshalText() ([]byte, error) {
 		return nil, err
 	}
 	return []byte(e.String()), nil
+}
+
+// UnmarshalText accepts only the stable public spellings emitted by
+// MarshalText. Invalid input leaves the receiver unchanged.
+func (e *Effect) UnmarshalText(text []byte) error {
+	var parsed Effect
+	switch string(text) {
+	case "read":
+		parsed = EffectRead
+	case "create":
+		parsed = EffectCreate
+	case "write":
+		parsed = EffectWrite
+	default:
+		return fmt.Errorf("effect is invalid: %q", text)
+	}
+	if e == nil {
+		return fmt.Errorf("effect receiver is nil")
+	}
+	*e = parsed
+	return nil
+}
+
+// UnmarshalJSON accepts only a quoted stable public spelling. In particular,
+// JSON null is not treated as an absent update that preserves an earlier
+// effect value.
+func (e *Effect) UnmarshalJSON(data []byte) error {
+	if e == nil {
+		return fmt.Errorf("effect receiver is nil")
+	}
+	text, err := unmarshalSemanticEnumJSON(data, "effect")
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalText(text)
 }
 
 // Validate rejects the zero value and values that are not part of the public
@@ -98,6 +134,40 @@ func (c Cardinality) MarshalText() ([]byte, error) {
 	}
 }
 
+// UnmarshalText accepts only the stable public spellings emitted by
+// MarshalText. Invalid input leaves the receiver unchanged.
+func (c *Cardinality) UnmarshalText(text []byte) error {
+	var parsed Cardinality
+	switch string(text) {
+	case "one":
+		parsed = CardinalityOne
+	case "many":
+		parsed = CardinalityMany
+	case "unbounded":
+		parsed = CardinalityUnbounded
+	default:
+		return fmt.Errorf("impact cardinality is invalid: %q", text)
+	}
+	if c == nil {
+		return fmt.Errorf("impact cardinality receiver is nil")
+	}
+	*c = parsed
+	return nil
+}
+
+// UnmarshalJSON accepts only a quoted stable public spelling. Invalid JSON
+// leaves the receiver unchanged.
+func (c *Cardinality) UnmarshalJSON(data []byte) error {
+	if c == nil {
+		return fmt.Errorf("impact cardinality receiver is nil")
+	}
+	text, err := unmarshalSemanticEnumJSON(data, "impact cardinality")
+	if err != nil {
+		return err
+	}
+	return c.UnmarshalText(text)
+}
+
 // Declaration is an explicit yes/no declaration. Its zero value means that a
 // mutation author has not considered that impact dimension yet.
 type Declaration uint8
@@ -125,6 +195,49 @@ func (d Declaration) MarshalText() ([]byte, error) {
 		return nil, err
 	}
 	return []byte(d.String()), nil
+}
+
+// UnmarshalText accepts only the stable public spellings emitted by
+// MarshalText. Invalid input leaves the receiver unchanged.
+func (d *Declaration) UnmarshalText(text []byte) error {
+	var parsed Declaration
+	switch string(text) {
+	case "no":
+		parsed = DeclarationNo
+	case "yes":
+		parsed = DeclarationYes
+	default:
+		return fmt.Errorf("impact declaration is invalid: %q", text)
+	}
+	if d == nil {
+		return fmt.Errorf("impact declaration receiver is nil")
+	}
+	*d = parsed
+	return nil
+}
+
+// UnmarshalJSON accepts only a quoted stable public spelling. Invalid JSON
+// leaves the receiver unchanged.
+func (d *Declaration) UnmarshalJSON(data []byte) error {
+	if d == nil {
+		return fmt.Errorf("impact declaration receiver is nil")
+	}
+	text, err := unmarshalSemanticEnumJSON(data, "impact declaration")
+	if err != nil {
+		return err
+	}
+	return d.UnmarshalText(text)
+}
+
+func unmarshalSemanticEnumJSON(data []byte, label string) ([]byte, error) {
+	var text *string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return nil, fmt.Errorf("%s JSON must be a quoted string: %w", label, err)
+	}
+	if text == nil {
+		return nil, fmt.Errorf("%s JSON must be a quoted string", label)
+	}
+	return []byte(*text), nil
 }
 
 func (d Declaration) validate(name string) error {

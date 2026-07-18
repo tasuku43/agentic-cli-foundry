@@ -1,5 +1,8 @@
 # Work Tasks: Short outcome
 
+- Goal: [goal.md](goal.md)
+- Plan: [plan.md](plan.md)
+
 Use checkboxes for atomic work and add evidence after completion. This file tracks execution; it does not override the goal, context, plan, or governing invariants.
 
 ## Understand
@@ -17,7 +20,9 @@ Use checkboxes for atomic work and add evidence after completion. This file trac
 - [ ] Classify utility/discover/act roles and opaque reference flow.
 - [ ] Classify the capability as public, internal, deferred, or excluded.
 - [ ] Identify effects, target, assets, and trust-boundary changes.
-- [ ] Decide authentication, output completeness, timeout, retry, idempotency, and schema-drift contracts when an external API is involved.
+- [ ] Decide authentication, output delivery, collection coverage, timeout,
+      retry, idempotency, and schema-drift contracts when an external API is
+      involved.
 - [ ] Create or update an ADR for a durable trade-off.
 - [ ] Revise an incomplete thesis before adding a local code exception, then list propagation work.
 - [ ] Obtain required design approval.
@@ -34,6 +39,12 @@ Use checkboxes for atomic work and add evidence after completion. This file trac
 - [ ] Add structured output/error, pagination, cancellation, hostile-output, and zero-downstream-call tests in proportion to risk.
 - [ ] Add or update harness enforcement.
 - [ ] Update durable documentation.
+- [ ] For an interpretation-sensitive presentation change, add one typed
+      semantic fixture, answer key, exact next argv, negative-inference canaries,
+      and same-fixture before/after evidence using `presentation-evidence.md`.
+- [ ] For a removed or replaced capability, prove public-contract, dependency,
+      fallback, and persisted-state retirement using
+      `capability-retirement.md`.
 
 ## Verify
 
@@ -44,12 +55,17 @@ Use checkboxes for atomic work and add evidence after completion. This file trac
 - [ ] `task release:check` passes when required. Evidence:
 - [ ] Runtime-only behavior was observed on the required platform. Evidence:
 - [ ] The relevant agent-readiness scenario met its discovery-round-trip budget. Evidence:
+- [ ] The routine-success external-processing count is zero for each supported
+      outcome, or a deliberately raw utility documents its narrower promise.
+      Evidence:
 - [ ] Setup/authentication candidates have a human-handoff scorecard and safety/certainty rationale. Evidence:
 - [ ] Generated diff and repository status are understood. Evidence:
 
 ## Hand off
 
 - [ ] Acceptance criteria have evidence.
+- [ ] Goal status is changed to `Complete` only after all goal and task
+      checkboxes are complete; `Superseded` names a canonical successor goal.
 - [ ] Durable decisions were promoted out of the work packet.
 - [ ] Temporary diagnostics and sensitive artifacts were removed.
 - [ ] Follow-up work is explicit and does not block this goal.

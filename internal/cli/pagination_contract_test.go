@@ -16,7 +16,7 @@ func pagedDiscoverSpec(path, itemKind, cursorKind string) CommandSpec {
 	})
 	spec.Agent.Output.Formats = []OutputFormat{OutputFormatJSON}
 	spec.Agent.Output.DefaultFormat = OutputFormatJSON
-	spec.Agent.Output.Completeness = OutputCompletenessPaged
+	spec.Agent.Output.Delivery = OutputDeliveryPaged
 	spec.Agent.Pagination = &PaginationContract{
 		CursorInput: "--cursor",
 		CursorOutput: OutputField{
@@ -38,10 +38,16 @@ func TestPagedOutputRequiresExactOpaqueCursorBinding(t *testing.T) {
 	workflows := catalog.referenceWorkflows()
 	foundCursorLoop := false
 	for _, workflow := range workflows {
-		if workflow.ReferenceKind == "item-page" && workflow.Producer.Path == paged.Path &&
-			workflow.Producer.Field == "next_cursor" && workflow.Consumer.Path == paged.Path &&
-			workflow.Consumer.Input == "--cursor" {
-			foundCursorLoop = true
+		if workflow.ReferenceKind != "item-page" {
+			continue
+		}
+		for _, producer := range workflow.Producers {
+			for _, consumer := range workflow.Consumers {
+				if producer.Path == paged.Path && producer.Field == "next_cursor" &&
+					consumer.Path == paged.Path && consumer.Input == "--cursor" {
+					foundCursorLoop = true
+				}
+			}
 		}
 	}
 	if !foundCursorLoop {
@@ -87,8 +93,36 @@ func TestDefaultSampleOutputRemainsCompleteAndUnpaged(t *testing.T) {
 	if !found {
 		t.Fatal("default catalog lacks sample list")
 	}
-	if sampleList.Agent.Output.Completeness != OutputCompletenessComplete || sampleList.Agent.Pagination != nil {
+	if sampleList.Agent.Output.Delivery != OutputDeliveryComplete ||
+		sampleList.Agent.Output.CollectionCoverage != CollectionCoverageExhaustive ||
+		sampleList.Agent.Pagination != nil {
 		t.Fatalf("sample list output contract = %+v, pagination = %+v", sampleList.Agent.Output, sampleList.Agent.Pagination)
+	}
+}
+
+func TestOutputDeliveryAndCollectionCoverageAreIndependent(t *testing.T) {
+	for _, coverage := range []CollectionCoverage{
+		CollectionCoverageExhaustive,
+		CollectionCoverageBoundedWindow,
+		CollectionCoverageDifferentialWindow,
+	} {
+		t.Run("complete_"+string(coverage), func(t *testing.T) {
+			discover := discoverSpec("items list", "item")
+			discover.Agent.Output.CollectionCoverage = coverage
+			act := actSpec("items read", "item", "--id")
+			if err := NewCatalog(discover, act).Validate(); err != nil {
+				t.Fatalf("complete delivery with %s coverage: %v", coverage, err)
+			}
+		})
+
+		t.Run("paged_"+string(coverage), func(t *testing.T) {
+			discover := pagedDiscoverSpec("items list", "item", "item-page")
+			discover.Agent.Output.CollectionCoverage = coverage
+			act := actSpec("items read", "item", "--id")
+			if err := NewCatalog(discover, act).Validate(); err != nil {
+				t.Fatalf("paged delivery with %s coverage: %v", coverage, err)
+			}
+		})
 	}
 }
 
@@ -102,8 +136,14 @@ func TestPaginationContractFailsClosed(t *testing.T) {
 			want:   "paged output must declare",
 		},
 		"complete with binding": {
-			mutate: func(spec *CommandSpec) { spec.Agent.Output.Completeness = OutputCompletenessComplete },
+			mutate: func(spec *CommandSpec) { spec.Agent.Output.Delivery = OutputDeliveryComplete },
 			want:   "complete output must not declare",
+		},
+		"paged without collection coverage": {
+			mutate: func(spec *CommandSpec) {
+				spec.Agent.Output.CollectionCoverage = CollectionCoverageNotApplicable
+			},
+			want: "paged output requires collection coverage",
 		},
 		"non JSON output": {
 			mutate: func(spec *CommandSpec) {

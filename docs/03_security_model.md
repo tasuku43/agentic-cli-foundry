@@ -84,6 +84,9 @@ Discovery output may contain labels controlled by an external system, but action
 - Do not authorize against a display name, row position, copied URL, or reconstructed resource path.
 - Do not case-fold, decode, unescape, trim, or otherwise normalize an opaque ID unless its domain contract explicitly defines that operation.
 - Bind mutation `TargetRef` to the same validated ID accepted by the action command.
+- Validate a returned reference against the kind required by its semantic field,
+  not only against a shared byte shape. A valid reference of another kind
+  remains a contract violation rather than displayable data.
 - Keep remote labels out of authorization identity and sanitize them separately for display.
 - Reject control/format runes and Unicode line or paragraph separators at opaque transport boundaries where they have no valid protocol role. Validation rejects; it never silently rewrites an ID, cursor, target part, or idempotency key.
 
@@ -158,6 +161,8 @@ Scoped agent help publishes this boundary in `io_contract`: `external_text_trust
 A derived project must decide:
 
 - which output modes are stable;
+- the exact collection scope, observation/window/checkpoint, and whether
+  coverage is exhaustive, bounded, differential, or not applicable;
 - how control characters are escaped or rejected;
 - maximum stdout and stderr budgets;
 - whether partial output is ever allowed;
@@ -165,6 +170,15 @@ A derived project must decide:
 - which stream carries errors versus data.
 
 Do not let presentation sanitization change the identity used for authorization. Authorization uses validated domain values; display labels/content use a visible projection. Opaque references bypass that projection and retain the exact validated value.
+
+Presentation is also a semantic trust boundary. It must not invent or strengthen
+identity, scope, relationships, completeness, or uncertainty from external
+prose, item order, display names, proximity, quoting, or indentation. A result
+for a scoped task retains that declared scope even when its collection is
+empty; recovering scope from a member would make empty and adversarial
+collections ambiguous. Task-owned tests cover only the request dimensions and
+state distinctions the capability actually carries, rather than assuming one
+universal result shape.
 
 ## Supply-chain boundary
 

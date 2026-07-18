@@ -16,7 +16,7 @@ type helpFormat uint8
 const (
 	helpFormatText helpFormat = iota
 	helpFormatAgent
-	agentHelpSchemaVersion = 4
+	agentHelpSchemaVersion = 5
 )
 
 type agentIndexDocument struct {
@@ -92,22 +92,25 @@ type agentExitCode struct {
 }
 
 type agentCommand struct {
-	Path         string            `json:"path"`
-	Summary      string            `json:"summary"`
-	Usage        string            `json:"usage"`
-	Args         string            `json:"args,omitempty"`
-	Effect       string            `json:"effect"`
-	Role         string            `json:"role"`
-	Contract     AgentContract     `json:"contract"`
-	ProducesRefs []ProducedRef     `json:"produces_refs"`
-	ConsumesRefs []ConsumedRef     `json:"consumes_refs"`
-	NextActions  []agentNextAction `json:"next_actions"`
+	Path         string        `json:"path"`
+	Summary      string        `json:"summary"`
+	Usage        string        `json:"usage"`
+	Args         string        `json:"args,omitempty"`
+	Effect       string        `json:"effect"`
+	Role         string        `json:"role"`
+	Contract     AgentContract `json:"contract"`
+	ProducesRefs []ProducedRef `json:"produces_refs"`
+	ConsumesRefs []ConsumedRef `json:"consumes_refs"`
 }
 
+// agentWorkflow is the complete adjacency for one reference kind. Catalog
+// validation makes same-kind endpoints interchangeable, so listing each unique
+// endpoint once preserves the full producer-to-consumer edge set without
+// serializing its Cartesian product.
 type agentWorkflow struct {
-	ReferenceKind string                `json:"reference_kind"`
-	Producer      agentWorkflowProducer `json:"producer"`
-	Consumer      agentWorkflowConsumer `json:"consumer"`
+	ReferenceKind string                  `json:"reference_kind"`
+	Producers     []agentWorkflowProducer `json:"producers"`
+	Consumers     []agentWorkflowConsumer `json:"consumers"`
 }
 
 type agentWorkflowProducer struct {
@@ -120,14 +123,6 @@ type agentWorkflowConsumer struct {
 	Path  string `json:"path"`
 	Usage string `json:"usage"`
 	Input string `json:"input"`
-}
-
-type agentNextAction struct {
-	Path          string `json:"path"`
-	Usage         string `json:"usage"`
-	ReferenceKind string `json:"reference_kind"`
-	FromField     string `json:"from_field"`
-	ToInput       string `json:"to_input"`
 }
 
 func runHelp(ctx context.Context, c *CLI, _ CommandSpec, _ operation.Intent, args []string) int {
@@ -371,7 +366,6 @@ func (c *CLI) renderAgentHelp(selector string, exact bool, commands []CommandSpe
 			Contract:     cloneAgentContract(command.Agent),
 			ProducesRefs: command.ProducedRefs(),
 			ConsumesRefs: command.ConsumedRefs(),
-			NextActions:  nextActionsForCommand(workflows, command.Path),
 		})
 	}
 	output, err := json.Marshal(document)
@@ -423,27 +417,59 @@ func defaultAgentErrorContract() agentErrorContract {
 func (c Catalog) referenceWorkflows() []agentWorkflow {
 	commands := c.Commands()
 	workflows := make([]agentWorkflow, 0)
+	workflowIndex := make(map[string]int)
+	producerSeen := make(map[string]map[agentWorkflowProducer]struct{})
 	for _, producer := range commands {
 		for _, produced := range producer.ProducedRefs() {
-			for _, consumer := range commands {
-				for _, consumed := range consumer.ConsumedRefs() {
-					if consumed.Kind != produced.Kind {
-						continue
-					}
-					workflows = append(workflows, agentWorkflow{
-						ReferenceKind: produced.Kind,
-						Producer: agentWorkflowProducer{
-							Path: producer.Path, Usage: producer.Usage(), Field: produced.Field,
-						},
-						Consumer: agentWorkflowConsumer{
-							Path: consumer.Path, Usage: consumer.Usage(), Input: consumed.Argument,
-						},
-					})
-				}
+			index, exists := workflowIndex[produced.Kind]
+			if !exists {
+				index = len(workflows)
+				workflowIndex[produced.Kind] = index
+				workflows = append(workflows, agentWorkflow{
+					ReferenceKind: produced.Kind,
+					Producers:     make([]agentWorkflowProducer, 0),
+					Consumers:     make([]agentWorkflowConsumer, 0),
+				})
+				producerSeen[produced.Kind] = make(map[agentWorkflowProducer]struct{})
 			}
+			projected := agentWorkflowProducer{Path: producer.Path, Usage: producer.Usage(), Field: produced.Field}
+			if _, duplicate := producerSeen[produced.Kind][projected]; duplicate {
+				continue
+			}
+			producerSeen[produced.Kind][projected] = struct{}{}
+			workflows[index].Producers = append(workflows[index].Producers, projected)
 		}
 	}
-	return workflows
+
+	consumerSeen := make(map[string]map[agentWorkflowConsumer]struct{}, len(workflows))
+	for _, consumer := range commands {
+		for _, consumed := range consumer.ConsumedRefs() {
+			index, exists := workflowIndex[consumed.Kind]
+			if !exists {
+				continue
+			}
+			seen := consumerSeen[consumed.Kind]
+			if seen == nil {
+				seen = make(map[agentWorkflowConsumer]struct{})
+				consumerSeen[consumed.Kind] = seen
+			}
+			projected := agentWorkflowConsumer{Path: consumer.Path, Usage: consumer.Usage(), Input: consumed.Argument}
+			if _, duplicate := seen[projected]; duplicate {
+				continue
+			}
+			seen[projected] = struct{}{}
+			workflows[index].Consumers = append(workflows[index].Consumers, projected)
+		}
+	}
+
+	complete := workflows[:0]
+	for _, workflow := range workflows {
+		if len(workflow.Producers) == 0 || len(workflow.Consumers) == 0 {
+			continue
+		}
+		complete = append(complete, workflow)
+	}
+	return complete
 }
 
 func workflowsForCommands(workflows []agentWorkflow, commands []CommandSpec) []agentWorkflow {
@@ -453,28 +479,26 @@ func workflowsForCommands(workflows []agentWorkflow, commands []CommandSpec) []a
 	}
 	filtered := make([]agentWorkflow, 0)
 	for _, workflow := range workflows {
-		_, produces := selected[workflow.Producer.Path]
-		_, consumes := selected[workflow.Consumer.Path]
-		if produces || consumes {
+		// Keep the complete kind adjacency when any endpoint is selected. Pruning
+		// the other side would hide valid ways to enter or leave the scoped task.
+		matches := false
+		for _, producer := range workflow.Producers {
+			if _, exists := selected[producer.Path]; exists {
+				matches = true
+				break
+			}
+		}
+		if !matches {
+			for _, consumer := range workflow.Consumers {
+				if _, exists := selected[consumer.Path]; exists {
+					matches = true
+					break
+				}
+			}
+		}
+		if matches {
 			filtered = append(filtered, workflow)
 		}
 	}
 	return filtered
-}
-
-func nextActionsForCommand(workflows []agentWorkflow, path string) []agentNextAction {
-	actions := make([]agentNextAction, 0)
-	for _, workflow := range workflows {
-		if workflow.Producer.Path != path {
-			continue
-		}
-		actions = append(actions, agentNextAction{
-			Path:          workflow.Consumer.Path,
-			Usage:         workflow.Consumer.Usage,
-			ReferenceKind: workflow.ReferenceKind,
-			FromField:     workflow.Producer.Field,
-			ToInput:       workflow.Consumer.Input,
-		})
-	}
-	return actions
 }

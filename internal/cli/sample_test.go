@@ -186,6 +186,76 @@ func TestSampleJSONOutputSnapshotsAndSafeProjection(t *testing.T) {
 	}
 }
 
+func TestSampleEmptyListJSONIsSuccessfulEmptyCollection(t *testing.T) {
+	repository := &cliSampleRepository{}
+	command, stdout, stderr := newSampleCLI(repository)
+	if code := runCLI(command, []string{"sample", "list", "--format=json"}); code != ExitOK {
+		t.Fatalf("sample list code = %d, stderr = %q", code, stderr.String())
+	}
+	if got, want := stdout.String(), "{\"schema_version\":1,\"items\":[]}\n"; got != want {
+		t.Fatalf("sample list JSON = %q, want %q", got, want)
+	}
+	if stderr.Len() != 0 || repository.lists != 1 || repository.gets != 0 {
+		t.Fatalf("stderr = %q, list calls = %d, get calls = %d", stderr.String(), repository.lists, repository.gets)
+	}
+}
+
+func TestSampleDisplayNameDoesNotSelectIdentity(t *testing.T) {
+	const (
+		firstID  = "smp_2f4a6c8e0b1d"
+		secondID = "smp_91b3d5f7a2c4"
+	)
+	repository := &cliSampleRepository{
+		items: []sample.Summary{
+			{ID: firstID, Name: "Same label"},
+			{ID: secondID, Name: "Same label"},
+		},
+		item:  sample.Item{ID: secondID, Name: "Same label", Content: "Selected only by opaque ID."},
+		found: true,
+	}
+	command, stdout, stderr := newSampleCLI(repository)
+	if code := runCLI(command, []string{"sample", "list", "--format=json"}); code != ExitOK {
+		t.Fatalf("sample list code = %d, stderr = %q", code, stderr.String())
+	}
+	var list sampleListJSONDocument
+	if err := json.Unmarshal(stdout.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 || list.Items[0].ID != firstID || list.Items[1].ID != secondID ||
+		list.Items[0].Name != list.Items[1].Name {
+		t.Fatalf("same-label list lost distinct identity: %+v", list)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runCLI(command, []string{"sample", "read", "--id", secondID, "--format=json"}); code != ExitOK {
+		t.Fatalf("sample read code = %d, stderr = %q", code, stderr.String())
+	}
+	var read sampleReadJSONDocument
+	if err := json.Unmarshal(stdout.Bytes(), &read); err != nil {
+		t.Fatal(err)
+	}
+	if repository.gets != 1 || repository.lastGet != secondID || read.Item.ID != secondID {
+		t.Fatalf("get calls = %d, requested ID = %q, result = %+v", repository.gets, repository.lastGet, read)
+	}
+}
+
+func TestSampleReadRejectsRepositoryTargetMismatchBeforePresentation(t *testing.T) {
+	const requestedID = "smp_2f4a6c8e0b1d"
+	repository := &cliSampleRepository{
+		item:  sample.Item{ID: "smp_91b3d5f7a2c4", Name: "Different target"},
+		found: true,
+	}
+	command, stdout, stderr := newSampleCLI(repository)
+	if code := runCLI(command, []string{"sample", "read", "--id", requestedID, "--format=json"}); code != ExitInternal {
+		t.Fatalf("sample read code = %d, want %d; stderr = %q", code, ExitInternal, stderr.String())
+	}
+	if stdout.Len() != 0 || repository.gets != 1 || repository.lastGet != requestedID ||
+		!strings.Contains(stderr.String(), "code: internal_error") {
+		t.Fatalf("stdout = %q, stderr = %q, gets = %d, ID = %q", stdout.String(), stderr.String(), repository.gets, repository.lastGet)
+	}
+}
+
 func TestAdversarialExternalTextPreservesStructuresStreamsAndOpaqueID(t *testing.T) {
 	const (
 		id              = "smp_2f4a6c8e0b1d"

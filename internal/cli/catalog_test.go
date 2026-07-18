@@ -27,10 +27,11 @@ func utilitySpec(path string) CommandSpec {
 			Outcome:      "Complete a bounded test outcome",
 			Inputs:       []CommandInput{},
 			Output: CommandOutput{
-				Formats:       []OutputFormat{OutputFormatText},
-				DefaultFormat: OutputFormatText,
-				Fields:        []OutputField{{Name: "result", Type: OutputFieldTypeString, Description: "Stable test result."}},
-				Completeness:  OutputCompletenessComplete,
+				Formats:            []OutputFormat{OutputFormatText},
+				DefaultFormat:      OutputFormatText,
+				Fields:             []OutputField{{Name: "result", Type: OutputFieldTypeString, Description: "Stable test result."}},
+				Delivery:           OutputDeliveryComplete,
+				CollectionCoverage: CollectionCoverageNotApplicable,
 			},
 			Prerequisites: []string{},
 			Errors: []CommandError{
@@ -90,6 +91,7 @@ func discoverSpec(path, kind string) CommandSpec {
 	}
 	spec.Agent.Output.JSONEnvelope = "items"
 	spec.Agent.Output.JSONSchemaVersion = 1
+	spec.Agent.Output.CollectionCoverage = CollectionCoverageExhaustive
 	return spec
 }
 
@@ -142,6 +144,26 @@ func TestDefaultCatalogIsValidAndUnique(t *testing.T) {
 	for _, required := range []string{"doctor", "help", "version"} {
 		if !seen[required] {
 			t.Errorf("catalog is missing %q", required)
+		}
+	}
+}
+
+func TestDefaultCatalogSeparatesDeliveryFromCollectionCoverage(t *testing.T) {
+	wantCoverage := map[string]CollectionCoverage{
+		"doctor":      CollectionCoverageExhaustive,
+		"help":        CollectionCoverageExhaustive,
+		"sample list": CollectionCoverageExhaustive,
+		"sample read": CollectionCoverageNotApplicable,
+		"version":     CollectionCoverageNotApplicable,
+	}
+	for path, coverage := range wantCoverage {
+		command, found := DefaultCatalog().Lookup(path)
+		if !found {
+			t.Fatalf("default catalog lacks %q", path)
+		}
+		if command.Agent.Output.Delivery != OutputDeliveryComplete ||
+			command.Agent.Output.CollectionCoverage != coverage {
+			t.Errorf("%s output = %+v, want delivery complete and coverage %q", path, command.Agent.Output, coverage)
 		}
 	}
 }
@@ -229,6 +251,104 @@ func TestArgumentSyntaxRequiredAndAllowedValuesMatchAgentInputs(t *testing.T) {
 	}
 }
 
+func TestArgumentSyntaxAllowsOneExactFixedFlagValue(t *testing.T) {
+	valid := utilitySpec("items apply")
+	valid.Args = "--confirm=destructive"
+	valid.Agent.Inputs = []CommandInput{{
+		Name: "--confirm", Source: InputSourceFlag, Required: true,
+		Description: "Confirm the exact mutation class.", AllowedValues: []string{"destructive"},
+	}}
+	if err := NewCatalog(valid).Validate(); err != nil {
+		t.Fatalf("valid exact literal flag grammar: %v", err)
+	}
+
+	for name, allowed := range map[string][]string{
+		"free form":     {},
+		"wrong literal": {"access-change"},
+		"extra literal": {"destructive", "access-change"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			spec := cloneCommandSpec(valid)
+			spec.Agent.Inputs[0].AllowedValues = allowed
+			if err := NewCatalog(spec).Validate(); err == nil {
+				t.Fatal("exact literal syntax mismatch passed validation")
+			}
+		})
+	}
+
+	malformed := cloneCommandSpec(valid)
+	malformed.Args = "--confirm=destructive=unexpected"
+	if err := NewCatalog(malformed).Validate(); err == nil {
+		t.Fatal("malformed exact literal syntax passed validation")
+	}
+}
+
+func TestCatalogRequiresOneFaultSignatureAcrossCommands(t *testing.T) {
+	first := utilitySpec("first")
+	second := utilitySpec("second")
+	if err := NewCatalog(first, second).Validate(); err != nil {
+		t.Fatalf("matching fault signatures: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*CommandError){
+		"kind":         func(declared *CommandError) { declared.Kind = fault.KindUnavailable },
+		"retryability": func(declared *CommandError) { declared.Retryable = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			conflicting := cloneCommandSpec(second)
+			for index := range conflicting.Agent.Errors {
+				if conflicting.Agent.Errors[index].Code == "test_failed" {
+					mutate(&conflicting.Agent.Errors[index])
+				}
+			}
+			err := NewCatalog(first, conflicting).Validate()
+			if err == nil || !strings.Contains(err.Error(), `fault code "test_failed" has conflicting signatures`) {
+				t.Fatalf("Validate() error = %v, want conflicting fault signature", err)
+			}
+		})
+	}
+}
+
+func TestCatalogFaultSignaturesIncludeAgentHelpGlobalErrors(t *testing.T) {
+	matching := utilitySpec("matching")
+	matching.Agent.Errors = append(matching.Agent.Errors, declaredCommandError(
+		fault.KindContract,
+		"invalid_catalog",
+		false,
+		matching.Path,
+		"Repair the command-specific catalog observation.",
+	))
+	if err := NewCatalog(matching).Validate(); err != nil {
+		t.Fatalf("matching global fault signature with command-local recovery: %v", err)
+	}
+
+	for name, declared := range map[string]CommandError{
+		"kind": declaredCommandError(
+			fault.KindUnavailable,
+			"invalid_catalog",
+			false,
+			"test",
+			"Retry after the unavailable dependency recovers.",
+		),
+		"retryability": declaredCommandError(
+			fault.KindContract,
+			"invalid_catalog",
+			true,
+			"test",
+			"Retry after repairing the catalog.",
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			conflicting := utilitySpec("test")
+			conflicting.Agent.Errors = append(conflicting.Agent.Errors, declared)
+			err := NewCatalog(conflicting).Validate()
+			if err == nil || !strings.Contains(err.Error(), `fault code "invalid_catalog" has conflicting signatures`) {
+				t.Fatalf("Validate() error = %v, want conflict with agent-help global error", err)
+			}
+		})
+	}
+}
+
 func TestCatalogRequiresCommonRuntimeFailures(t *testing.T) {
 	removeError := func(spec *CommandSpec, code string) {
 		filtered := make([]CommandError, 0, len(spec.Agent.Errors))
@@ -267,6 +387,10 @@ func TestCatalogRequiresCommonRuntimeFailures(t *testing.T) {
 	if err := NewCatalog(noOutput).Validate(); err != nil {
 		t.Fatalf("no-output command unnecessarily requires output_write_failed: %v", err)
 	}
+	noOutput.Agent.Output.CollectionCoverage = CollectionCoverageExhaustive
+	if err := NewCatalog(noOutput).Validate(); err == nil || !strings.Contains(err.Error(), "none output format requires collection coverage") {
+		t.Fatalf("no-output command with collection coverage error = %v", err)
+	}
 }
 
 func TestAgentContractValidationFailsClosed(t *testing.T) {
@@ -298,8 +422,11 @@ func TestAgentContractValidationFailsClosed(t *testing.T) {
 		"missing field description": func(spec *CommandSpec) {
 			spec.Agent.Output.Fields[0].Description = ""
 		},
-		"unknown completeness": func(spec *CommandSpec) {
-			spec.Agent.Output.Completeness = OutputCompletenessUnknown
+		"unknown delivery": func(spec *CommandSpec) {
+			spec.Agent.Output.Delivery = OutputDeliveryUnknown
+		},
+		"unknown collection coverage": func(spec *CommandSpec) {
+			spec.Agent.Output.CollectionCoverage = CollectionCoverageUnknown
 		},
 		"unknown prerequisites": func(spec *CommandSpec) { spec.Agent.Prerequisites = nil },
 		"unknown errors":        func(spec *CommandSpec) { spec.Agent.Errors = nil },
@@ -507,8 +634,9 @@ func TestReferenceGraphAllowsMultipleInputsOfTheSameKind(t *testing.T) {
 		t.Fatalf("ConsumedRefs() = %+v", consumed)
 	}
 	workflows := catalog.referenceWorkflows()
-	if len(workflows) != 2 {
-		t.Fatalf("reference workflows = %+v, want one per same-kind input", workflows)
+	if len(workflows) != 1 || len(workflows[0].Producers) != 1 || len(workflows[0].Consumers) != 2 ||
+		workflows[0].Consumers[0].Input != "--left-id" || workflows[0].Consumers[1].Input != "--right-id" {
+		t.Fatalf("reference workflows = %+v, want one grouped kind with both inputs", workflows)
 	}
 }
 

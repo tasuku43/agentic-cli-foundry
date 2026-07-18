@@ -11,12 +11,12 @@ This document defines the small set of cross-project contracts supplied for API-
 | Authentication | Secret-free requirements and session metadata, a fail-closed application gate, an ephemeral binding issued only by infrastructure and passed unchanged through task ports, exact record revalidation before I/O, typed failures, and zero downstream calls on rejection | OAuth or PAT, grant, credential source/storage, scopes, expiry headroom, refresh/cache, tenant/account selection, login UX, and revocation |
 | OAuth implementation | Do not implement OAuth protocol machinery in the template; keep a selected library behind infrastructure | Whether OAuth is needed and which reviewed adapter/library is justified; see [ADR 0001](decisions/0001-oauth-library-boundary.md) |
 | Effects | `read`, `create`, or `write`; a create binds one opaque parent/scope input, a write binds one matching opaque existing-target input plus optional parent, generic impact is explicit, and policy is injected at one application boundary | Confirmation, approval, dry-run, OS authentication, authorization reuse, and domain-specific impact |
-| Pagination | Opaque cursor envelope, explicit budgets, loop detection, cancellation, complete-or-no-result traversal, and a JSON-only public-page contract with a top-level completion cursor | Exhaustive versus public paged behavior, page size, ordering/snapshot semantics, limits, and user overrides |
+| Pagination and coverage | Opaque cursor envelope, explicit budgets, loop detection, cancellation, complete-or-no-result delivery, a JSON-only public-page contract with a top-level completion cursor, and an explicit collection-coverage class | Exhaustive task scope, bounded or differential window meaning, page size, ordering/snapshot semantics, limits, and user overrides |
 | Calls | Finite timeout, attempt count, and upstream idempotency are explicit; unsafe mutation retry is rejected | Vendor error classification, retry/backoff budget, idempotency-key support, and endpoint-specific timeouts |
 | Failures | Stable kind/code/retryability/next-action model | Product-specific codes and commands that resolve a failure |
 | Schemas | Wire DTOs stay in infrastructure; drift is tested with publishable fixtures | Schema source, update cadence, unknown-field policy, compatibility window, and fixture license |
 | Capabilities | Public catalog entries are finite and validated; unsupported work is recorded rather than exposed accidentally | Upstream coverage, deferred/internal capabilities, owners, rollout order, and explicit non-goals |
-| Output | Declared format, fields, types, completeness, terminal escaping, and contract tests | Which human and machine formats are stable and the bounded size/streaming policy |
+| Output | Declared format, fields, types, delivery, collection coverage, terminal escaping, and contract tests | Which human and machine formats are stable, the exact collection scope/window, and the bounded size/streaming policy |
 | Release | One gate, public-boundary checks, byte-for-byte reproducible archives for identical pinned inputs, checksums, and immutable release intent | Supported platforms, signing/provenance, package managers, cadence, and long-term support |
 
 The template side of this table fixes vocabulary, validation, and enforcement points; it does not silently choose the derived-side settings. The derived side is not a gap: it is where the product thesis and security model must become concrete before the corresponding live capability is enabled.
@@ -29,11 +29,34 @@ Authentication is a precondition, not a transport error to discover after a writ
 
 A non-nil catalog authentication requirement means the command uses the template application gate. The catalog must declare the gate's complete standard fault set with exact code, kind, retryability, and command-valid recovery actions; validation rejects omissions before dispatch. Provider-specific authentication, rate-limit, unavailable, or unsupported faults are additional derived-project declarations rather than replacements for that base set.
 
-## Pagination and completeness
+## Delivery, collection coverage, and pagination
 
-`domain/page` defines a one-page envelope with an opaque cursor. `app/pagination.Drain` owns exhaustive traversal and requires explicit page, item, and page-size budgets.
+`CommandOutput` declares two separate facts. `delivery` is `complete` or `paged`:
 
-An exhaustive command follows this contract:
+- `complete` means one invocation returns the entire result selected by the task
+  or returns no successful result;
+- `paged` means one invocation returns one complete public page and an explicit
+  continuation cursor.
+
+`collection_coverage` is independent:
+
+- `not_applicable` for a scalar, single object, or no output;
+- `exhaustive` for every item in the exact declared task scope at the stated
+  observation point;
+- `bounded_window` for a completely delivered finite/latest/provider-capped
+  window that is not the whole task universe;
+- `differential_window` for a completely delivered change window since an
+  explicit provider or task checkpoint, not historical exhaustiveness.
+
+Therefore `delivery: complete` does not imply `collection_coverage: exhaustive`.
+The concrete limit, checkpoint, ordering, snapshot, and uncertainty remain typed
+domain/application result facts rather than generic fields invented by the
+renderer. Existing derived commands must classify their real scope; do not
+mechanically migrate every old `complete` declaration to `exhaustive`.
+
+`domain/page` defines a one-page envelope with an opaque cursor. `app/pagination.Drain` owns complete-or-no-result traversal and requires explicit page, item, and page-size budgets.
+
+An exhaustive task scope delivered through internal traversal follows this contract:
 
 1. Forward each cursor byte-for-byte; never decode, trim, reconstruct, or expose a resource URL as a replacement.
 2. Stop only when the adapter returns an empty next cursor.
@@ -43,12 +66,21 @@ An exhaustive command follows this contract:
 6. Validate every page and domain item before presentation.
 7. Return the complete result or an error with no partial result.
 
-`complete` and `paged` are different public contracts:
+`delivery: complete` exposes no public pagination binding. It may pair with
+`exhaustive`, `bounded_window`, or `differential_window` according to the exact
+task scope. `delivery: paged` binds exactly one optional cursor argument or flag
+to exactly one top-level string cursor field through
+`AgentContract.Pagination`. The cursor field is always emitted beside
+`schema_version` and the collection envelope; `CommandOutput.Fields` continue
+to describe only items inside the envelope. Both cursor endpoints carry the
+same dedicated opaque reference kind, and no other command, input, or output
+may use that cursor kind. The typed `completion: "empty_cursor"` rule makes the
+empty string the only completion marker; omission, JSON `null`, and a non-string
+value are contract failures, not completion. A paged collection cannot declare
+`not_applicable`; its coverage describes the scope obtained when the declared
+cursor traversal reaches completion.
 
-- `complete` means the command owns exhaustive traversal. It uses the bounded drain behavior above, exposes no pagination binding, and returns the whole declared result or no result.
-- `paged` means one successful invocation returns one complete public page, not an exhaustive collection. Its `AgentContract.Pagination` binds exactly one optional cursor argument or flag to exactly one top-level string cursor field. That field is always emitted beside `schema_version` and the collection envelope; `CommandOutput.Fields` continue to describe only items inside the envelope. Both cursor endpoints carry the same dedicated opaque reference kind, and no other command, input, or output may use that cursor kind. The typed `completion: "empty_cursor"` rule makes the empty string the only completion marker; omission, JSON `null`, and a non-string value are contract failures, not completion.
-
-Paged commands support only JSON and use JSON as their default. This keeps every successful presentation self-describing and prevents a text or TSV page without a completion marker from looking exhaustive. Catalog validation rejects a missing paged binding, a binding on complete output, any other output format, a required or non-CLI cursor input, an invalid or colliding top-level cursor field, a missing or unknown completion rule, non-opaque cursors, kind mismatch, and extra cursor candidates. Renderer fixture checks require the top-level cursor to be present and string-typed. Agent help projects the binding with the input/output contracts and derives a same-command continuation workflow, so an agent passes the emitted cursor bytes back without trimming, decoding, or guessing. A declared page is not an incomplete successful output; silently truncating that page, omitting its continuation cursor, or reaching a local limit without a cursor is a contract failure.
+Paged commands support only JSON and use JSON as their default. This keeps every successful presentation self-describing and prevents a text or TSV page without a completion marker from looking exhaustive. Catalog validation rejects an unknown delivery or coverage, paged plus `not_applicable`, a missing paged binding, a binding on complete delivery, any other output format, a required or non-CLI cursor input, an invalid or colliding top-level cursor field, a missing or unknown completion rule, non-opaque cursors, kind mismatch, and extra cursor candidates. Renderer fixture checks require the top-level cursor to be present and string-typed. Agent help projects the binding with the input/output contracts and derives a same-command continuation workflow, so an agent passes the emitted cursor bytes back without trimming, decoding, or guessing. A declared page is not an incomplete successful output; silently truncating that page, omitting its continuation cursor, or reaching a local limit without a cursor is a contract failure.
 
 ## Timeout, retry, and idempotency
 

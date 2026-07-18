@@ -91,7 +91,7 @@ func TestRootAgentHelpIsACompactProjectionOfTheCatalog(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
 		t.Fatalf("agent help is not JSON: %v\n%s", err, stdout.String())
 	}
-	if document.SchemaVersion != agentHelpSchemaVersion || document.View != "index" || document.Program != ProgramName {
+	if document.SchemaVersion != 5 || agentHelpSchemaVersion != 5 || document.View != "index" || document.Program != ProgramName {
 		t.Fatalf("agent document header = %+v", document)
 	}
 	if document.ScopeRequest.InvocationTemplate != "agentic-cli-foundry help <command-or-namespace> --format agent" ||
@@ -171,7 +171,11 @@ func TestAgentHelpRootAndScopedShapeSnapshots(t *testing.T) {
 	if err := json.Unmarshal(root["commands"], &rootCommands); err != nil {
 		t.Fatal(err)
 	}
-	assertJSONKeys(t, rootCommands[0], []string{"capability_id", "effect", "namespace", "outcome", "path", "role", "summary"})
+	for index, command := range rootCommands {
+		t.Run(fmt.Sprintf("root_command_%d", index), func(t *testing.T) {
+			assertJSONKeys(t, command, []string{"capability_id", "effect", "namespace", "outcome", "path", "role", "summary"})
+		})
+	}
 	var scopeRequest map[string]json.RawMessage
 	if err := json.Unmarshal(root["scope_request"], &scopeRequest); err != nil {
 		t.Fatal(err)
@@ -189,7 +193,46 @@ func TestAgentHelpRootAndScopedShapeSnapshots(t *testing.T) {
 	if err := json.Unmarshal(scoped["commands"], &scopedCommands); err != nil {
 		t.Fatal(err)
 	}
-	assertJSONKeys(t, scopedCommands[0], []string{"args", "consumes_refs", "contract", "effect", "next_actions", "path", "produces_refs", "role", "summary", "usage"})
+	for index, command := range scopedCommands {
+		t.Run(fmt.Sprintf("scoped_command_%d", index), func(t *testing.T) {
+			assertJSONKeys(t, command, []string{"args", "consumes_refs", "contract", "effect", "path", "produces_refs", "role", "summary", "usage"})
+			if _, legacy := command["next_actions"]; legacy {
+				t.Fatal("scoped agent help retained command-local reference next_actions")
+			}
+			var contract map[string]json.RawMessage
+			if err := json.Unmarshal(command["contract"], &contract); err != nil {
+				t.Fatal(err)
+			}
+			var output map[string]json.RawMessage
+			if err := json.Unmarshal(contract["output"], &output); err != nil {
+				t.Fatal(err)
+			}
+			assertJSONKeys(t, output, []string{
+				"collection_coverage", "default_format", "delivery", "fields", "formats", "json_envelope", "json_schema_version",
+			})
+			if _, legacy := output["completeness"]; legacy {
+				t.Fatal("scoped agent help retained the ambiguous output completeness field")
+			}
+		})
+	}
+	var workflows []map[string]json.RawMessage
+	if err := json.Unmarshal(scoped["workflows"], &workflows); err != nil {
+		t.Fatal(err)
+	}
+	if len(workflows) != 1 {
+		t.Fatalf("workflows = %+v", workflows)
+	}
+	assertJSONKeys(t, workflows[0], []string{"consumers", "producers", "reference_kind"})
+	var producers []map[string]json.RawMessage
+	if err := json.Unmarshal(workflows[0]["producers"], &producers); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, producers[0], []string{"field", "path", "usage"})
+	var consumers []map[string]json.RawMessage
+	if err := json.Unmarshal(workflows[0]["consumers"], &consumers); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, consumers[0], []string{"input", "path", "usage"})
 }
 
 func TestRootAgentHelpSizeGrowthContainsOnlyIndexFields(t *testing.T) {
@@ -328,7 +371,8 @@ func TestAgentHelpCanSelectNamespaceWithoutLoadingWholeCatalog(t *testing.T) {
 	if len(document.Commands) != 2 || document.Commands[0].Path != "sample list" || document.Commands[1].Path != "sample read" {
 		t.Fatalf("namespace commands = %+v", document.Commands)
 	}
-	if len(document.Workflows) != 1 {
+	if len(document.Workflows) != 1 || document.Workflows[0].ReferenceKind != "sample" ||
+		len(document.Workflows[0].Producers) != 1 || len(document.Workflows[0].Consumers) != 1 {
 		t.Fatalf("namespace workflows = %+v", document.Workflows)
 	}
 	for _, entry := range document.Commands {
@@ -385,8 +429,9 @@ func TestAgentHelpCanSelectOneCatalogCommandWithItsWorkflow(t *testing.T) {
 		document.Commands[0].Effect != "read" || document.Commands[0].Role != "act" {
 		t.Fatalf("commands = %+v", document.Commands)
 	}
-	if len(document.Workflows) != 1 || document.Workflows[0].Producer.Path != "sample list" ||
-		document.Workflows[0].Consumer.Path != "sample read" {
+	if len(document.Workflows) != 1 || len(document.Workflows[0].Producers) != 1 ||
+		document.Workflows[0].Producers[0].Path != "sample list" || len(document.Workflows[0].Consumers) != 1 ||
+		document.Workflows[0].Consumers[0].Path != "sample read" {
 		t.Fatalf("selected command workflows = %+v", document.Workflows)
 	}
 }
@@ -408,7 +453,7 @@ func TestAgentHelpPublishesDiscoverToActReferenceFlow(t *testing.T) {
 	discover := commands["sample list"]
 	if discover.Role != "discover" || discover.Effect != "read" ||
 		!reflect.DeepEqual(discover.ProducesRefs, []ProducedRef{{Kind: "sample", Field: "id"}}) ||
-		len(discover.ConsumesRefs) != 0 || len(discover.NextActions) != 1 {
+		len(discover.ConsumesRefs) != 0 {
 		t.Fatalf("sample list agent contract = %+v", discover)
 	}
 	act := commands["sample read"]
@@ -417,10 +462,57 @@ func TestAgentHelpPublishesDiscoverToActReferenceFlow(t *testing.T) {
 		len(act.ProducesRefs) != 0 {
 		t.Fatalf("sample read agent contract = %+v", act)
 	}
-	action := discover.NextActions[0]
-	if action.Path != "sample read" || action.ReferenceKind != "sample" ||
-		action.FromField != "id" || action.ToInput != "--id" {
-		t.Fatalf("derived next action = %+v", action)
+	if len(document.Workflows) != 1 || document.Workflows[0].ReferenceKind != "sample" ||
+		!reflect.DeepEqual(document.Workflows[0].Producers, []agentWorkflowProducer{{
+			Path: "sample list", Usage: "agentic-cli-foundry sample list [--format tsv|json]", Field: "id",
+		}}) || !reflect.DeepEqual(document.Workflows[0].Consumers, []agentWorkflowConsumer{{
+		Path: "sample read", Usage: "agentic-cli-foundry sample read --id <sample-id> [--format tsv|json]", Input: "--id",
+	}}) {
+		t.Fatalf("derived grouped workflow = %+v", document.Workflows)
+	}
+}
+
+func TestSelectedProducerDerivesExactNextArgvFromGroupedWorkflow(t *testing.T) {
+	var listOut, listErr bytes.Buffer
+	listCLI := New(strings.NewReader(""), &listOut, &listErr)
+	if code := runCLI(listCLI, []string{"sample", "list", "--format", "json"}); code != ExitOK {
+		t.Fatalf("sample list code = %d, stderr = %q", code, listErr.String())
+	}
+	var listed struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(listOut.Bytes(), &listed); err != nil || len(listed.Items) == 0 {
+		t.Fatalf("sample list output = %q, error = %v", listOut.String(), err)
+	}
+
+	var helpOut, helpErr bytes.Buffer
+	helpCLI := New(strings.NewReader(""), &helpOut, &helpErr)
+	if code := runCLI(helpCLI, []string{"help", "sample", "list", "--format=agent"}); code != ExitOK {
+		t.Fatalf("selected producer help code = %d, stderr = %q", code, helpErr.String())
+	}
+	var document agentDocument
+	if err := json.Unmarshal(helpOut.Bytes(), &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Workflows) != 1 || len(document.Workflows[0].Producers) != 1 || len(document.Workflows[0].Consumers) != 1 {
+		t.Fatalf("selected producer workflows = %+v", document.Workflows)
+	}
+	producer := document.Workflows[0].Producers[0]
+	consumer := document.Workflows[0].Consumers[0]
+	if producer.Path != "sample list" || producer.Field != "id" || consumer.Path != "sample read" ||
+		consumer.Input != "--id" || consumer.Usage != "agentic-cli-foundry sample read --id <sample-id> [--format tsv|json]" {
+		t.Fatalf("selected producer adjacency = producer %+v consumer %+v", producer, consumer)
+	}
+	nextArgv := append(strings.Fields(consumer.Path), consumer.Input, listed.Items[0].ID)
+	var readOut, readErr bytes.Buffer
+	readCLI := New(strings.NewReader(""), &readOut, &readErr)
+	if code := runCLI(readCLI, nextArgv); code != ExitOK {
+		t.Fatalf("derived next argv %v code = %d, stderr = %q", nextArgv, code, readErr.String())
+	}
+	if !strings.Contains(readOut.String(), listed.Items[0].ID) {
+		t.Fatalf("derived next argv output = %q, want exact ID %q", readOut.String(), listed.Items[0].ID)
 	}
 }
 
@@ -440,7 +532,8 @@ func TestAgentRoundTripContractCoversDiscoveryActionAndRecovery(t *testing.T) {
 	}
 	discover := commands["sample list"]
 	act := commands["sample read"]
-	if discover.Contract.Output.Completeness != OutputCompletenessComplete ||
+	if discover.Contract.Output.Delivery != OutputDeliveryComplete ||
+		discover.Contract.Output.CollectionCoverage != CollectionCoverageExhaustive ||
 		len(discover.ProducesRefs) != 1 || discover.ProducesRefs[0] != (ProducedRef{Kind: "sample", Field: "id"}) {
 		t.Fatalf("discovery contract = %+v", discover)
 	}
@@ -449,8 +542,9 @@ func TestAgentRoundTripContractCoversDiscoveryActionAndRecovery(t *testing.T) {
 		act.Contract.Inputs[0].Description == "" || act.Contract.Inputs[0].AllowedValues == nil {
 		t.Fatalf("action input contract = %+v", act.Contract.Inputs)
 	}
-	if len(document.Workflows) != 1 || document.Workflows[0].Producer.Path != discover.Path ||
-		document.Workflows[0].Consumer.Path != act.Path || document.Workflows[0].Consumer.Input != "--id" {
+	if len(document.Workflows) != 1 || len(document.Workflows[0].Producers) != 1 ||
+		document.Workflows[0].Producers[0].Path != discover.Path || len(document.Workflows[0].Consumers) != 1 ||
+		document.Workflows[0].Consumers[0].Path != act.Path || document.Workflows[0].Consumers[0].Input != "--id" {
 		t.Fatalf("round-trip workflow = %+v", document.Workflows)
 	}
 	foundRecovery := false
@@ -463,6 +557,183 @@ func TestAgentRoundTripContractCoversDiscoveryActionAndRecovery(t *testing.T) {
 	if !foundRecovery {
 		t.Fatalf("action errors lack discover recovery: %+v", act.Contract.Errors)
 	}
+}
+
+type workflowEdge struct {
+	ReferenceKind string
+	Producer      agentWorkflowProducer
+	Consumer      agentWorkflowConsumer
+}
+
+type legacyAgentWorkflow struct {
+	ReferenceKind string                `json:"reference_kind"`
+	Producer      agentWorkflowProducer `json:"producer"`
+	Consumer      agentWorkflowConsumer `json:"consumer"`
+}
+
+func TestGroupedAgentWorkflowsPreserveEveryReferenceEdge(t *testing.T) {
+	alphaList := discoverSpec("alpha list", "alpha")
+	alphaSearch := discoverSpec("alpha search", "alpha")
+	alphaRead := actSpec("alpha read", "alpha", "--left-id", "--right-id")
+	betaList := discoverSpec("beta list", "beta")
+	betaRead := actSpec("beta read", "beta", "--id")
+	catalog := NewCatalog(alphaList, alphaSearch, alphaRead, betaList, betaRead)
+	if err := catalog.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+
+	workflows := catalog.referenceWorkflows()
+	if len(workflows) != 2 {
+		t.Fatalf("grouped workflows = %+v, want one record per reference kind", workflows)
+	}
+	got := groupedWorkflowEdges(workflows)
+	want := pairExpandedWorkflowEdges(catalog.Commands())
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("grouped edges = %+v, want %+v", got, want)
+	}
+	if len(got) != 5 {
+		t.Fatalf("edge count = %d, want 5", len(got))
+	}
+
+	selected, exact := catalog.Select("alpha read")
+	if !exact || len(selected) != 1 {
+		t.Fatalf("selected exact=%t commands=%+v", exact, selected)
+	}
+	scoped := workflowsForCommands(workflows, selected)
+	if len(scoped) != 1 || scoped[0].ReferenceKind != "alpha" ||
+		len(scoped[0].Producers) != 2 || len(scoped[0].Consumers) != 2 {
+		t.Fatalf("scoped grouped workflow = %+v", scoped)
+	}
+}
+
+func TestDerivedScaleScopedAgentHelpFitsWholeResponseBudget(t *testing.T) {
+	catalog := derivedScaleHelpCatalog(t)
+	selected, exact := catalog.Select("scale")
+	if exact || len(selected) != 6 {
+		t.Fatalf("scale selection exact=%t commands=%d", exact, len(selected))
+	}
+
+	encoded, err := (&CLI{catalog: catalog}).renderAgentHelp("scale", false, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const maxScopedHelpBytes = 64 * 1024
+	if len(encoded) > maxScopedHelpBytes {
+		t.Fatalf("grouped derived-scale scoped help = %d UTF-8 bytes, want <= %d", len(encoded), maxScopedHelpBytes)
+	}
+
+	var document agentDocument
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.SchemaVersion != 5 || len(document.Commands) != len(selected) || len(document.Workflows) != 1 ||
+		len(document.Workflows[0].Producers) != 18 || len(document.Workflows[0].Consumers) != 18 {
+		t.Fatalf("derived-scale grouped document = schema %d commands %d workflows %+v", document.SchemaVersion, len(document.Commands), document.Workflows)
+	}
+	if got, want := groupedWorkflowEdges(document.Workflows), pairExpandedWorkflowEdges(catalog.Commands()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("derived-scale grouped edges = %d, want %d", len(got), len(want))
+	}
+
+	legacyWorkflows := pairExpandGroupedWorkflows(document.Workflows)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["workflows"], err = json.Marshal(legacyWorkflows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyEncoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyEncoded = append(legacyEncoded, '\n')
+	if len(legacyEncoded) <= maxScopedHelpBytes {
+		t.Fatalf("synthetic corpus no longer exposes Cartesian growth: pair-expanded help = %d bytes, budget = %d", len(legacyEncoded), maxScopedHelpBytes)
+	}
+	t.Logf("derived-scale scoped help: grouped=%d bytes pair-expanded=%d bytes budget=%d bytes edges=%d",
+		len(encoded), len(legacyEncoded), maxScopedHelpBytes, len(legacyWorkflows))
+}
+
+func derivedScaleHelpCatalog(t *testing.T) Catalog {
+	t.Helper()
+	const commandsPerRole = 3
+	const endpointsPerCommand = 6
+	commands := make([]CommandSpec, 0, commandsPerRole*2)
+	for commandIndex := 0; commandIndex < commandsPerRole; commandIndex++ {
+		spec := discoverSpec(fmt.Sprintf("scale discover%02d", commandIndex), "resource")
+		spec.Agent.Output.Fields = make([]OutputField, 0, endpointsPerCommand)
+		for endpointIndex := 0; endpointIndex < endpointsPerCommand; endpointIndex++ {
+			spec.Agent.Output.Fields = append(spec.Agent.Output.Fields, OutputField{
+				Name:          fmt.Sprintf("resource_%02d_%02d", commandIndex, endpointIndex),
+				Type:          OutputFieldTypeString,
+				Description:   "Opaque synthetic resource reference.",
+				ReferenceKind: "resource",
+			})
+		}
+		commands = append(commands, spec)
+	}
+	for commandIndex := 0; commandIndex < commandsPerRole; commandIndex++ {
+		inputs := make([]string, 0, endpointsPerCommand)
+		for endpointIndex := 0; endpointIndex < endpointsPerCommand; endpointIndex++ {
+			inputs = append(inputs, fmt.Sprintf("--resource-%02d-%02d", commandIndex, endpointIndex))
+		}
+		commands = append(commands, actSpec(fmt.Sprintf("scale inspect%02d", commandIndex), "resource", inputs...))
+	}
+	catalog := NewCatalog(commands...)
+	if err := catalog.Validate(); err != nil {
+		t.Fatalf("derived-scale catalog validation: %v", err)
+	}
+	return catalog
+}
+
+func pairExpandedWorkflowEdges(commands []CommandSpec) map[workflowEdge]struct{} {
+	edges := make(map[workflowEdge]struct{})
+	for _, producerCommand := range commands {
+		for _, produced := range producerCommand.ProducedRefs() {
+			for _, consumerCommand := range commands {
+				for _, consumed := range consumerCommand.ConsumedRefs() {
+					if produced.Kind != consumed.Kind {
+						continue
+					}
+					edges[workflowEdge{
+						ReferenceKind: produced.Kind,
+						Producer:      agentWorkflowProducer{Path: producerCommand.Path, Usage: producerCommand.Usage(), Field: produced.Field},
+						Consumer:      agentWorkflowConsumer{Path: consumerCommand.Path, Usage: consumerCommand.Usage(), Input: consumed.Argument},
+					}] = struct{}{}
+				}
+			}
+		}
+	}
+	return edges
+}
+
+func groupedWorkflowEdges(workflows []agentWorkflow) map[workflowEdge]struct{} {
+	edges := make(map[workflowEdge]struct{})
+	for _, workflow := range workflows {
+		for _, producer := range workflow.Producers {
+			for _, consumer := range workflow.Consumers {
+				edges[workflowEdge{ReferenceKind: workflow.ReferenceKind, Producer: producer, Consumer: consumer}] = struct{}{}
+			}
+		}
+	}
+	return edges
+}
+
+func pairExpandGroupedWorkflows(workflows []agentWorkflow) []legacyAgentWorkflow {
+	expanded := make([]legacyAgentWorkflow, 0)
+	for _, workflow := range workflows {
+		for _, producer := range workflow.Producers {
+			for _, consumer := range workflow.Consumers {
+				expanded = append(expanded, legacyAgentWorkflow{
+					ReferenceKind: workflow.ReferenceKind,
+					Producer:      producer,
+					Consumer:      consumer,
+				})
+			}
+		}
+	}
+	return expanded
 }
 
 func TestHelpRejectsUnknownSelectorsAndFormats(t *testing.T) {

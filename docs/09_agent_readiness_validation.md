@@ -6,12 +6,30 @@ This validation asks whether a coding agent can discover, execute, interpret, an
 
 A round trip is one CLI invocation whose purpose is to learn what invocation should come next. The task invocation and authentication ceremony are counted separately, but the ceremony must also publish the human-handoff scorecard below. Parsing a declared JSON or TSV field is not an additional discovery round trip; scraping prose, guessing a URL, or probing variants is.
 
+Track external processing separately from round trips. Extracting a declared
+JSON or TSV field is direct consumption and has count zero. An undeclared
+`jq`/`grep` join, custom parser, provider-notation interpretation, source
+inspection, or exploratory API request is one external reconstruction step. A
+supported task outcome has a routine-success external-processing budget of zero;
+a deliberately raw export or low-level utility may publish a narrower contract.
+
 The target is:
 
-- unknown surface to scoped task contract: at most two discovery invocations;
-- known task path to executable invocation: one scoped help invocation;
+- unknown surface to one selected scoped task contract: at most two
+  help-discovery invocations;
+- known task path, with every required reference and other task input already
+  held, to its executable contract: one scoped-help invocation;
 - discover reference to read/write: no extra lookup or transformation invocation;
 - classified failure to next corrective command: no prose interpretation or command guessing.
+- supported outcome to semantic answer and canonical next reference: zero
+  undeclared external reconstruction steps.
+
+These are bounds on help discovery and selected-contract retrieval, not on the
+whole workflow. They exclude authentication and task invocations, producer
+discovery, and any later scoped-help request needed for the complete contract of
+a workflow endpoint outside the initial selection. Grouped workflow endpoint
+usage can form next argv without implying that the endpoint's complete contract
+was selected.
 
 For each setup/authentication candidate, record required environment variables or exports, fixed values re-entered, terminal-to-browser transfers, browser-to-terminal transfers, clipboard or OS-integration dependencies, discover-to-act trips that do not contribute to target selection, first-run commands, steady-state commands, and ceremonial inputs that add no target certainty. These values compare candidates; they are not a scalar optimization target. A handoff may be justified when it materially improves safety, explicit consent, or agent certainty.
 
@@ -37,8 +55,33 @@ For each derived command, verify all four stages.
 |---|---|
 | Discover | Root `view: index` exposes path, namespace, summary, capability, outcome, effect, and role plus a machine-readable `scope_request`; selected `view: scope` declares inputs, input sources, prerequisites, effect, output, authentication, errors, mutation facts, and workflow edges |
 | Execute | Arguments are copied from declared fields or explicit configuration; the resolved command, exclusive reference/fixed target binding, effect, runtime target, auth requirement, and impact validate before I/O |
-| Interpret | Machine output has declared fields/types/completeness; structural runes are visibly projected; scoped I/O metadata marks external text as untrusted data; opaque references remain validated exact values |
+| Interpret | The result is bound to its declared task and every target, parent, or scope dimension that task actually carries before rendering; scoped empty collections retain scope and interpretation-relevant absent, empty, zero, false, and unresolved states stay distinct; machine output has declared fields/types/delivery/collection coverage; structural runes are visibly projected; scoped I/O metadata marks external text as untrusted data; opaque references retain exact values and their field-required kinds |
 | Recover | Failure kind/code/retryability/next actions are structured; auth, permission, ambiguity, missing targets, rate limits, temporary failure, cancellation, and contract failure remain distinct |
+
+## Semantic fixture and presentation evidence
+
+A relationship-rich or otherwise interpretation-sensitive capability keeps one
+presentation-independent typed fixture and a machine-readable answer key. The
+fixture includes every request dimension the task carries, retains scope when a
+scoped collection is empty, and includes interpretation-relevant
+absence/empty/zero/false examples, unresolved facts, and canonical references.
+Tests bind the answer key back to the typed fixture before using it to judge a
+renderer.
+
+Select negative canaries that apply to the capability, including tempting but
+invalid inferences from equal display names, adjacent items, ordering, quoted
+prose, raw provider notation, unknown or out-of-window parents, and indentation.
+A renderer is eligible only when the semantic answer and exact next argv can be
+obtained from one command with zero external reconstruction and every canonical
+action reference remains complete.
+
+For a significant default presentation change, generate before and after
+goldens from the same typed fixture. Record the fixture and golden hashes, exact
+byte counts, and any tokenizer name/version and token counts. These are
+secondary efficiency evidence after semantic eligibility, not a substitute for
+correctness. Keep failed, invalidated, and inconclusive evidence, and record a
+product compatibility decision separately from any benchmark result. Live-model
+evaluation is explicit and optional; it is not part of `task check`.
 
 ## Scenario A: project-collaboration CLI
 
@@ -49,11 +92,12 @@ Find a project by a human filter, obtain its canonical reference, and read its c
 ### Expected path
 
 1. The agent reads the compact root outcome index, chooses `commands[].path` or `commands[].namespace`, and applies the published `scope_request.invocation_template` without guessing help syntax.
-2. Scoped help identifies a `discover` command, its filter input, authentication/scopes, exhaustive or paged output contract, and its produced `project` reference field.
+2. Scoped help identifies a `discover` command, its filter input, authentication/scopes, complete or paged delivery, exhaustive/bounded/differential collection coverage, and its produced `project` reference field.
 3. The agent runs discovery in a machine format and selects an exact `project_id`. Multiple candidates remain data, not a hidden choice by the later action.
 4. Scoped help for the read action declares `--project-id` as consuming that reference kind.
 5. The agent passes the exact emitted bytes into the read action. It does not parse a browser URL, normalize case, or call discovery again.
-6. The result declares whether it is complete and names every stable output field.
+6. The result declares its delivery and collection coverage and names every
+   stable output field.
 
 ### Recovery probes
 
@@ -67,7 +111,13 @@ Find a project by a human filter, obtain its canonical reference, and read its c
 
 ### Acceptance
 
-An agent that knows only the desired outcome reaches the read command with at most two discovery invocations, then reuses the reference without transformation. Every recovery probe selects its next action from structured metadata.
+An agent that knows only the desired outcome reaches one selected task contract
+with at most two help-discovery invocations, then reuses the discovered
+reference without transformation. Once the read path and all required inputs
+are known, its complete contract takes one scoped-help invocation. Retrieving a
+complete contract for an endpoint outside the initial selection is counted
+separately. Every recovery probe selects its next action from structured
+metadata.
 
 ## Scenario B: team-chat CLI
 
@@ -111,13 +161,52 @@ go run ./cmd/agentic-cli-foundry sample read --id smp_2f4a6c8e0b1d --format json
 go run ./cmd/agentic-cli-foundry --error-format json sample read --id smp_000000000000
 ```
 
-The root agent contract must be schema version 4 with `view: index`, reveal the `sample` namespace and both exact paths, and contain no input, output, authentication, error, mutation, fixed-target, or workflow detail. Its `scope_request` must identify the selector fields, exact invocation template, two-invocation unknown-outcome bound, and one-invocation known-path bound. The scoped contract must use `view: scope`, contain only the relevant list/read commands and their reference workflow, and provide the complete global and command contracts. Its `io_contract` must publish `external_text_trust: untrusted_data`, `external_text_projection: visible_escape`, and `opaque_reference_policy: validated_exact_bytes`. The `id` selected from the list JSON is field extraction, not identifier transformation: pass its exact string bytes to read. The final probe must fail as `not_found`, use the dedicated exit status, write no success data to stdout, and name `sample list` as the structured next action on stderr.
+The root agent contract must be schema version 5 with `view: index`, reveal the
+`sample` namespace and both exact paths, and contain no input, output,
+authentication, error, mutation, fixed-target, or workflow detail. Its
+`scope_request` must identify the selector fields and exact invocation template.
+Its two-invocation unknown-outcome bound means root index plus one selected
+scoped contract; its one-invocation known-path bound assumes every required
+reference and other task input is already held. Neither includes task execution
+or later complete-contract retrieval for a workflow endpoint outside the
+selected scope. The scoped contract must use `view: scope`, contain only the
+relevant list/read commands, and represent the `sample` workflow as one
+reference-kind group with unique `producers[]` and `consumers[]`. The producer
+field plus consumer input and exact usage must provide the next argv without a
+command-local duplicate edge. The complete global and selected command contracts
+remain present, including fault-local recovery actions. Its `io_contract` must
+publish `external_text_trust: untrusted_data`,
+`external_text_projection: visible_escape`, and
+`opaque_reference_policy: validated_exact_bytes`. The help catalog's
+`CommandOutput.Fields` describes root `view: index` command entries; the
+input-selected `view: scope` document is an independent variant under the same
+schema version, with both views covered by dedicated exact-key contract tests.
+The `id` selected from the list JSON is field extraction, not identifier
+transformation: pass its exact string bytes to read. The final probe must fail as
+`not_found`, use the dedicated exit status, write no success data to stdout, and
+name `sample list` as the structured next action on stderr.
 
 ### Scoped-help footprint evidence
 
-On the template catalog, the pre-schema-4 2026-07-18 UTF-8 measurements were 1,517 bytes for root agent help, 5,359 bytes for exact `sample read` help, and 8,359 bytes for the `sample` namespace. These measurements are evidence, not yet a scoped contract budget. The existing 512-byte limit bounds each root selection entry, while scoped help deliberately repeats global error metadata and complete command-local contracts.
+On the template catalog, the schema-4 (pre-schema-5) 2026-07-18 UTF-8
+measurements were 1,517 bytes for root agent help, 5,359 bytes for exact
+`sample read` help, and 8,359 bytes for the `sample` namespace. The 512-byte
+limit continues to bound each root selection entry.
 
-A future scoped budget must not be implemented by deleting recovery or invocation facts. Evaluate a dictionary/code-reference representation and an explicit minimal-execution versus complete-contract split against a fixed derived-catalog corpus and tokenizer. The regression scenario must prove all four stages: discover an unknown outcome within two help calls; execute from exact typed inputs and effects; interpret fields, completeness, and opaque reference bytes; and recover from every classified fault through a structured next command. Only then set whole-response UTF-8 and token budgets and version the schema if its shape changes.
+With schema 5, the current root remains 1,517 bytes and the `sample` namespace
+is 8,222 bytes. The reduction is a consequence of removing redundant
+command-local reference next actions while retaining grouped workflow and
+fault-local recovery facts.
+
+Schema 5 adds a fixed derived-scale regression with six selected commands, 18
+producer endpoints, 18 consumer endpoints, and 324 implicit same-kind edges.
+The grouped document is 24,493 UTF-8 bytes; a pair-expanded representation of
+the same facts is 177,759 bytes. The fixed corpus has a 65,536-byte
+whole-response budget. The test expands the groups in memory and proves exact
+edge-set equality, so meeting the budget cannot delete producer fields,
+consumer inputs, usage, invocation contracts, or fault recovery. This is a
+regression bound for the named corpus, not a claim that an arbitrary catalog
+can never exceed 64 KiB.
 
 Validation must also cover:
 
@@ -125,12 +214,17 @@ Validation must also cover:
 - URL, name, partial, uppercase, whitespace, and control-character variants rejected before repository access;
 - catalog/output snapshots detecting field or semantic changes;
 - root-versus-scoped agent-help shape snapshots and a per-command root-size growth bound;
-- executable checks that JSON schema versions, envelopes, and item keys equal their `CommandOutput` declarations;
+- executable checks that each single-shape JSON result's schema version,
+  envelope, and item keys equal its `CommandOutput` declaration;
+- help checks that root `commands[]` keys equal the help
+  `CommandOutput.Fields` declaration and that dedicated exact-key contracts fix
+  both root `view: index` and input-selected `view: scope` variants;
 - adversarial TSV/JSON/stderr fixtures containing ESC, actual newline, bidi and zero-width format runes, U+2028/U+2029, literal backslash escapes, JSON-looking fragments, and prompt-like printable text;
 - exact opaque-ID round trips alongside hostile labels/content, proving presentation never rewrites identity;
 - complete pagination or no result;
 - typed not-found recovery pointing back to discovery;
-- structured contract visibility for effect, prerequisites, fields, completeness, errors, and next actions.
+- structured contract visibility for effect, prerequisites, fields, delivery,
+  collection coverage, errors, and next actions.
 - declared default formats, JSON envelopes/schema versions, stdout/stderr ownership, and the complete exit-code map;
 - successful output emitted only after complete pagination, validation, bounding, and rendering;
 - root help that never embeds complete command contracts, plus namespace/exact scoped help that does not force the agent to ingest unrelated detail.
@@ -139,4 +233,10 @@ The sample is not evidence that a real API adapter is secure. A derived CLI repe
 
 ## Review record
 
-Record the invocation transcript, number of discovery round trips, selected output/reference fields, and each recovery probe in the active work packet. If an agent needs prose interpretation, source inspection, URL parsing, hidden filtering, or an extra command guess, treat that as product/thesis evidence rather than teaching the agent a workaround.
+Record the invocation transcript, number of discovery round trips, routine
+external-processing count, selected output/reference fields, exact next argv,
+and each recovery probe in the active work packet. If an agent needs prose
+interpretation, source inspection, URL parsing, hidden filtering, a custom
+join/parser, provider-notation decoding, an exploratory request, or an extra
+command guess, treat that as product/thesis evidence rather than teaching the
+agent a workaround.

@@ -98,9 +98,18 @@ A CLI command exists to deliver a user outcome, not to mirror a package, protoco
 - Which vendor concepts must remain implementation details?
 - Which superficially related tasks are deliberately unsupported?
 
-## Thesis 2: Make discovery, execution, and interpretation predictable
+## Thesis 2: Close supported outcomes and make them predictable
 
 Humans and agents should be able to discover a command, invoke it, and interpret its result without exploratory network calls or undocumented heuristics.
+
+When a derived product declares an outcome supported, the CLI owns the
+deterministic selection, joining, and interpretation needed for routine
+success. The user may extract a declared JSON or TSV field, but does not need
+an undeclared `jq`/`grep` pipeline, custom parser, source inspection, provider
+notation knowledge, or an additional exploratory API call to reconstruct the
+answer. A deliberately low-level export or transport utility may define a
+narrower promise, but it must be named and classified as such instead of being
+presented as a closed task outcome.
 
 ### Consequences
 
@@ -109,15 +118,43 @@ Humans and agents should be able to discover a command, invoke it, and interpret
 - Help and dispatch derive from the same static catalog.
 - Output shape, exit behavior, and error ownership are deliberate public contracts.
 - Deterministic multi-step behavior belongs in an application use case rather than an agent prompt.
+- Domain and application results preserve declared task identity, every request
+  dimension the task carries, and any state distinction, reference kind, or
+  bounded uncertainty that affects interpretation before presentation sees it.
+- Presentation represents typed facts. It does not infer identity,
+  relationships, completeness, or confidence from labels, order, proximity,
+  indentation, or other display details.
 
 ### Mechanical enforcement
 
 - Catalog-wide help and routing contract tests run without external I/O.
-- Agent-help shape and growth tests reject detailed contracts leaking back into the root index and prove an unknown outcome reaches scoped detail in at most two discovery invocations.
-- Executable JSON-output contract tests compare renderer schema versions, envelopes, and item fields with the catalog declarations.
+- Agent-help shape and growth tests reject detailed contracts leaking back into
+  the root index and prove an unknown outcome reaches one selected scoped task
+  contract in at most two help-discovery invocations. A known path needs one
+  scoped-help invocation only when the caller already holds its required
+  references and other task inputs; neither bound includes task execution or
+  later full-contract retrieval for an out-of-scope workflow endpoint.
+- Executable single-shape JSON-output contract tests compare renderer schema
+  versions, envelopes, and item fields with the catalog declarations. Dedicated
+  exact-key tests fix both the catalog-declared root agent index and its
+  input-selected scoped variant.
 - Tests cover stable command paths, effects, examples, and negative input behavior.
 - Use-case tests fix orchestration order and ambiguity handling.
+- Each interpretation-sensitive capability adds task-owned tests for its
+  applicable request dimensions and state distinctions. Scoped collections
+  retain scope when empty; semantic reference fields reject the wrong kind; and
+  relationship-rich outputs include negative canaries for tempting display-only
+  inferences. The template sample mechanically proves exact-ID binding,
+  successful empty output, same-label identity separation, and no partial
+  pagination result; richer capabilities supply their own fixtures.
 - Public-contract changes are called out explicitly in pull requests.
+
+### Reviewed evidence
+
+- Agent-readiness records the external-processing count for routine success and
+  requires zero undeclared reconstruction steps for a supported outcome. This
+  is reviewed transcript evidence; the harness does not infer or mechanically
+  verify the count from prose.
 
 ### Derived-project questions
 
@@ -125,6 +162,10 @@ Humans and agents should be able to discover a command, invoke it, and interpret
 - Which output fields and exit statuses are stable?
 - Which deterministic workflow should be one command rather than several agent steps?
 - How does a user obtain the unique identifier required by an action?
+- What external join, parser, provider notation, or exploratory request would a
+  routine caller otherwise need, and why is it not owned by the supported task?
+- Which facts can be absent, empty, zero, false, unresolved, or bounded, and
+  where are those states typed before rendering?
 
 ## Thesis 3: Separate discovery from action and bind one target explicitly
 

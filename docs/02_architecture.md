@@ -44,7 +44,10 @@ Unknown effects and incomplete mutation intent are invalid domain states at an e
 - chooses the order of operations;
 - handles deterministic composition and ambiguity rules;
 - defines the smallest ports it needs;
-- returns task-specific results rather than infrastructure response types.
+- returns task-specific results rather than infrastructure response types;
+- validates that an adapter result belongs to the declared request task and
+  each target, parent, or scope dimension that task actually carries before
+  exposing it as success.
 
 The application layer depends on domain values and primitive types. It does not import infrastructure, parse CLI arguments, render terminal output, or construct transport requests.
 
@@ -63,12 +66,23 @@ Infrastructure owns protocol-specific validation and conversion. Raw OAuth token
 `internal/cli/` owns:
 
 - `CommandSpec` and `Catalog`;
-- `CommandRole` and the structured `AgentContract` for capability, inputs, outputs, complete/paged cursor binding, prerequisites, failures, authentication, and mutation facts;
+- `CommandRole` and the structured `AgentContract` for capability, inputs,
+  outputs, delivery, collection coverage, paged cursor binding, prerequisites,
+  failures, authentication, and mutation facts;
 - argument parsing and task-level validation;
 - help and public discovery;
 - output and error presentation;
 - the composition root that wires use cases to concrete adapters;
 - the controlled handoff to side-effect execution.
+
+The CLI represents semantic results; it does not create them. Declared task
+identity, applicable request dimensions, reference kind, interpretation-
+relevant absence versus explicit empty/zero/false values, ordering guarantees,
+and uncertainty are domain or application facts. A scoped collection retains
+scope when empty. A renderer must not derive these facts from the first
+collection member, a display name, physical order, proximity, quotation, or
+indentation. A relationship-rich capability keeps a presentation-independent
+typed fixture and answer key so the same facts can validate every renderer.
 
 `cmd/agentic-cli-foundry/main.go` is a thin executable entry point. It should not contain product logic or construct adapters independently of the CLI composition root.
 
@@ -89,8 +103,11 @@ At minimum, catalog validation rejects:
 - `EffectUnknown`;
 - `RoleUnknown`;
 - malformed, duplicate, role-inconsistent, orphaned, or closed-cycle reference declarations;
-- missing capability, input descriptions/allowed values, output field meanings/completeness, prerequisites, or recovery commands;
-- argv input metadata whose `Required` value or ordered `AllowedValues` disagree with the small bracket/`a|b` usage grammar; non-argv sources are excluded from this syntax check;
+- missing capability, input descriptions/allowed values, output field meanings,
+  delivery/collection coverage, prerequisites, or recovery commands;
+- argv input metadata whose `Required` value or ordered `AllowedValues` disagree
+  with the small bracket, `a|b`, and exact `--flag=literal` usage grammar;
+  non-argv sources are excluded from this syntax check;
 - missing or inconsistent common runtime failures (`operation_canceled`, output `output_write_failed`, standard authentication-gate failures, and standard mutation-invoker contract/policy/unknown-outcome failures), or an unknown-outcome recovery that points to another mutation;
 - recovery commands that are only catalog prefixes, contain unchecked argv, use an unknown help selector, or otherwise fall outside the exact-path/`help <path-or-namespace>` grammar;
 - read commands with mutation metadata; incomplete reference-bound create/write roles; incomplete, mixed, or mismatched fixed-target mutation binding; unbound or extra target inputs; and mutations without complete impact;
@@ -99,7 +116,7 @@ At minimum, catalog validation rejects:
 
 ## Command roles and opaque reference flow
 
-Actions use exactly one target-binding mode. `AgentContract.FixedTarget` is the command-bound declaration: stable kind, ID, description, and the only supported scope `tool_local`. Only `RoleAct` may declare it, and a fixed-target command has no produced or consumed reference edge. External, ambiguous, or caller-selected targets remain reference-bound. Scoped agent-help schema version 4 publishes the optional fixed target while the compact root index shape remains unchanged.
+Actions use exactly one target-binding mode. `AgentContract.FixedTarget` is the command-bound declaration: stable kind, ID, description, and the only supported scope `tool_local`. Only `RoleAct` may declare it, and a fixed-target command has no produced or consumed reference edge. External, ambiguous, or caller-selected targets remain reference-bound. Scoped agent-help schema version 5 publishes the optional fixed target while the compact root index shape remains unchanged.
 
 `CommandRole` describes where a task sits in a user workflow:
 
@@ -110,11 +127,36 @@ Actions use exactly one target-binding mode. `AgentContract.FixedTarget` is the 
 | `RoleAct` | Operates on exactly one target-binding mode: required opaque reference(s), or one command-bound `tool_local` fixed singleton; never chooses among candidates |
 | `RoleUnknown` | Invalid for a public command |
 
-Reference kinds live on `AgentContract.Output.Fields`, `AgentContract.Inputs`, and the top-level cursor field owned by `AgentContract.Pagination`. `ProducedRef` and `ConsumedRef` are compatibility projections, not a second declaration. The catalog derives the reference graph, scoped workflows, and next actions from those fields. A shared kind is an explicit claim that every value of that kind is interchangeable at each matching input; use distinct kinds when fields or target roles are not interchangeable. Every kind needs a producer and consumer, and the required-reference dependency graph must be reachable from at least one command that can run without an unresolved required reference. Optional first-page cursors do not create a dependency. `CommandOutput.Fields` always describe values inside the declared JSON envelope; a public `paged` output owns its separate cursor name, string type, description, and shared opaque kind in `Pagination`. Its typed `completion: "empty_cursor"` rule makes an always-present empty string the sole completion marker. Human help may stay concise; scoped agent help exposes the exact graph, pagination binding, and field meanings.
+Reference kinds live on `AgentContract.Output.Fields`, `AgentContract.Inputs`, and the top-level cursor field owned by `AgentContract.Pagination`. `ProducedRef` and `ConsumedRef` are compatibility projections, not a second declaration. The catalog derives the reference graph, grouped scoped workflows, and those producer/consumer projections from the structured fields. Fault recovery `next_actions` remain explicit declarations on `CommandError`; they do not derive from reference adjacency. A shared kind is an explicit claim that every value of that kind is interchangeable at each matching input; use distinct kinds when fields or target roles are not interchangeable. Every kind needs a producer and consumer, and the required-reference dependency graph must be reachable from at least one command that can run without an unresolved required reference. Optional first-page cursors do not create a dependency. `CommandOutput.Fields` always describe values inside the declared JSON envelope; public `paged` delivery owns its separate cursor name, string type, description, and shared opaque kind in `Pagination`. Its typed `completion: "empty_cursor"` rule makes an always-present empty string the sole completion marker. Human help may stay concise; scoped agent help exposes the exact graph, pagination binding, and field meanings.
 
-Agent-help schema version 4 separates selection from invocation detail. Root `help --format agent` is an `index` view containing only each command's path, top-level namespace, summary, capability ID, outcome, effect, and role. Each encoded command entry has a 512-byte catalog budget. Its `scope_request` names `commands[].path` and `commands[].namespace` as selectors and supplies the exact invocation template. `help <selector> --format agent` is a `scope` view containing global I/O/error contracts, complete selected `AgentContract` values (including an optional fixed target), and reference workflows touching the selection. Its I/O contract marks external text as untrusted data, declares visible structural projection, and distinguishes validated exact opaque references. A known path therefore needs one help invocation; an unknown outcome needs the root index and one scoped invocation. Root size still grows with the number of outcomes, but detailed inputs, outputs, authentication, failures, mutations, and workflows do not multiply there.
+Value-shape validation alone is insufficient when the same opaque encoding can
+name several resource classes. The task result validates each reference against
+the kind required by its semantic field. Supplying a structurally valid value
+of another kind is reference-kind laundering and fails before presentation or
+action composition.
 
-Catalog `CommandOutput` metadata is executable compatibility data, not descriptive decoration. Generic CLI contract tests run each built-in JSON renderer and compare its `schema_version`, declared envelope, and every item key with the corresponding catalog declaration. Agent-help shape snapshots separately fix the intentionally different root and scoped views.
+Agent-help schema version 5 separates selection from invocation detail. Root `help --format agent` is an `index` view containing only each command's path, top-level namespace, summary, capability ID, outcome, effect, and role. Each encoded command entry has a 512-byte catalog budget. Its `scope_request` names `commands[].path` and `commands[].namespace` as selectors and supplies the exact invocation template. `help <selector> --format agent` is a `scope` view containing global I/O/error contracts, complete selected `AgentContract` values (including an optional fixed target), and reference workflows touching the selection. Each workflow groups one `reference_kind` with unique `producers[]` and `consumers[]`; the shared-kind interchangeability contract supplies the implicit producer-to-consumer edges without encoding their Cartesian product. A scoped selection returns the complete group whenever any member touches the selection, so exact next usage, field, and input facts are not lost. Redundant command-local reference next actions are omitted, while fault recovery remains in `contract.errors[].next_actions`. The I/O contract marks external text as untrusted data, declares visible structural projection, and distinguishes validated exact opaque references.
+
+The `scope_request` counters bound only help discovery and retrieval of one
+selected command or namespace contract. An unknown outcome needs the root index
+plus one scoped-help request. A known path needs one scoped-help request only
+when the caller already holds every required reference and other task input.
+Authentication, task execution, producer discovery, and later retrieval of the
+complete contract for a workflow endpoint outside the selected scope are not
+part of those counts. Root size still grows with the number of outcomes, but
+detailed inputs, outputs, authentication, failures, mutations, and workflows do
+not multiply there.
+
+Catalog `CommandOutput` metadata is executable compatibility data, not descriptive decoration. `Delivery` declares complete-or-no-success invocation delivery versus the public paged cursor protocol. `CollectionCoverage` independently declares `not_applicable`, exhaustive coverage of the exact task scope and observation, a bounded window, or a differential window. Complete delivery never implies all provider history, and concrete limits/checkpoints remain task-owned semantic facts. Generic CLI contract tests compare each single-shape JSON renderer's `schema_version`, declared envelope, and every item key with the corresponding catalog declaration.
+
+Agent help is the one deliberate input-selected variant:
+`CommandOutput.Fields` describes root `view: index` command entries, while an
+optional selector produces an independent `view: scope` shape under the same
+schema version. Dedicated shape contract tests compare the exact top-level and
+command-entry keys for both views, rejecting missing and extra keys. The
+template does not add generic output-variant metadata for this single case; a
+second command needing variants must trigger a catalog abstraction rather than
+another exception.
 
 The default graph is:
 
@@ -160,7 +202,7 @@ argv
   -> domain validates Effect, Intent, TargetRef, Impact, auth, and API envelopes
   -> controlled execution boundary snapshots intent and applies derived policy
   -> infrastructure adapter performs one bounded logical operation
-  -> application returns a task result
+  -> application validates the result against the declared task and its applicable request dimensions
   -> CLI renders stable output and exit behavior
 ```
 

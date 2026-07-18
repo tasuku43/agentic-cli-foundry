@@ -19,6 +19,7 @@ func TestJSONOutputMatchesCatalogContract(t *testing.T) {
 		path  string
 		args  []string
 		build func() (*CLI, *bytes.Buffer, *bytes.Buffer)
+		view  string
 	}
 	newDefault := func() (*CLI, *bytes.Buffer, *bytes.Buffer) {
 		stdout := &bytes.Buffer{}
@@ -32,7 +33,7 @@ func TestJSONOutputMatchesCatalogContract(t *testing.T) {
 				return newTestCLI(passingInspector("ready"))
 			},
 		},
-		{path: "help", args: []string{"help", "--format=agent"}, build: newDefault},
+		{path: "help", args: []string{"help", "--format=agent"}, build: newDefault, view: "index"},
 		{path: "sample list", args: []string{"sample", "list", "--format=json"}, build: newDefault},
 		{path: "sample read", args: []string{"sample", "read", "--id", "smp_2f4a6c8e0b1d", "--format=json"}, build: newDefault},
 	}
@@ -58,12 +59,26 @@ func TestJSONOutputMatchesCatalogContract(t *testing.T) {
 			if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
 				t.Fatalf("output is not a JSON object: %v\n%s", err, stdout.String())
 			}
+			for _, catalogOnly := range []string{"delivery", "collection_coverage"} {
+				if _, exists := document[catalogOnly]; exists {
+					t.Fatalf("runtime success output unexpectedly contains catalog-only field %q: %s", catalogOnly, stdout.String())
+				}
+			}
 			var schemaVersion int
 			if err := json.Unmarshal(document["schema_version"], &schemaVersion); err != nil {
 				t.Fatalf("schema_version is missing or invalid: %v", err)
 			}
 			if schemaVersion != spec.Agent.Output.JSONSchemaVersion {
 				t.Fatalf("schema_version = %d, catalog = %d", schemaVersion, spec.Agent.Output.JSONSchemaVersion)
+			}
+			if current.view != "" {
+				var view string
+				if err := json.Unmarshal(document["view"], &view); err != nil {
+					t.Fatalf("view is missing or invalid: %v", err)
+				}
+				if view != current.view {
+					t.Fatalf("view = %q, want %q", view, current.view)
+				}
 			}
 			if err := validatePaginationJSONMarker(document, spec.Agent.Pagination); err != nil {
 				t.Fatalf("pagination output violates catalog: %v", err)

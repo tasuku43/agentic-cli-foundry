@@ -36,12 +36,12 @@ The default public output and exit contract is:
 
 | Surface | Contract |
 |---|---|
-| `doctor` | Complete TSV headed `CHECK<TAB>STATUS<TAB>DETAIL`, or JSON schema version 1 under `report`; status is `pass`, `warn`, or `fail` |
-| sample list | Complete TSV headed `id<TAB>name`, or JSON schema version 1 under `items`; every emitted ID is an unchanged reusable reference |
-| sample read | Complete TSV headed `id<TAB>name<TAB>content`, or JSON schema version 1 under `item` |
-| agent help | JSON schema version 4: root `view: index` returns path/namespace/summary/capability/outcome/effect/role entries plus a machine-readable scope request; selected `view: scope` returns global I/O/error rules, complete command contracts (including an optional fixed target), and applicable reference workflows |
+| `doctor` | Complete delivery with exhaustive coverage of the declared checks: TSV headed `CHECK<TAB>STATUS<TAB>DETAIL`, or JSON schema version 1 under `report`; status is `pass`, `warn`, or `fail` |
+| sample list | Complete delivery with exhaustive coverage of the synthetic repository: TSV headed `id<TAB>name`, or JSON schema version 1 under `items`; every emitted ID is an unchanged reusable reference |
+| sample read | Complete delivery with collection coverage `not_applicable`: TSV headed `id<TAB>name<TAB>content`, or JSON schema version 1 under `item` |
+| agent help | JSON schema version 5 with complete delivery and exhaustive coverage of the selected catalog scope: root `view: index` returns path/namespace/summary/capability/outcome/effect/role entries plus a machine-readable scope request; selected `view: scope` returns global I/O/error rules, complete command contracts (including an optional fixed target), and reference-kind workflows grouped into unique producer and consumer sets |
 | structured failure | JSON schema version 1 on stderr under `error`, selected by placing `--error-format json` before the command; text is the default |
-| version | `agentic-cli-foundry <version> (<commit>)` when commit metadata is available |
+| version | Complete delivery with collection coverage `not_applicable`: `agentic-cli-foundry <version> (<commit>)` when commit metadata is available |
 | exit `0` | Successful command |
 | exit `2` | Invalid command, option, or task input |
 | exit `3` | Unexpected internal failure |
@@ -53,6 +53,14 @@ The default public output and exit contract is:
 
 Successful results are written to stdout; failures are written to stderr. A zero exit status requires a complete successful write, and a partial result is never reported as success. A failed diagnostic may emit its complete report before returning its structured nonzero failure so the caller receives the evidence needed to recover.
 
+Delivery and collection coverage are independent public facts. Complete
+delivery means the task-selected result was fully written or no success was
+reported. It does not imply all provider history. Collection coverage is
+`not_applicable`, `exhaustive` over the exact declared task scope and
+observation, `bounded_window`, or `differential_window`. Paged delivery uses the
+separate public cursor contract and states the coverage obtained when that
+traversal completes.
+
 ## Public CLI vocabulary
 
 `cli.Catalog` is the source of truth for public commands. Each `cli.CommandSpec` represents one user task and owns at least:
@@ -62,19 +70,49 @@ Successful results are written to stdout; failures are written to stderr. A zero
 - an explicit `operation.Effect`;
 - a `CommandRole` of utility, discover, or act;
 - structured inputs and output fields from which opaque-reference edges are derived;
-- a stable capability ID, output format/types/completeness, prerequisites, declared failures, and exact recovery commands;
+- a stable capability ID, output formats/types, delivery, collection coverage,
+  prerequisites, declared failures, and exact recovery commands;
 - a default output format and, when JSON is supported, a stable envelope and positive schema version;
 - argument and validation behavior;
 - a handler or use-case binding;
 - enough metadata to generate accurate help and contract tests.
 
-No command path may also be another command's word-boundary namespace prefix: `foo` and `foo bar` cannot coexist because exact selection would hide the namespace children. Within the template's intentionally small usage grammar, brackets define optional argv inputs, non-bracketed inputs are required, and a written `a|b` enumeration must match `AllowedValues` exactly and in order. Stdin, environment, and configuration inputs remain outside argv syntax matching.
+No command path may also be another command's word-boundary namespace prefix: `foo` and `foo bar` cannot coexist because exact selection would hide the namespace children. Within the template's intentionally small usage grammar, brackets define optional argv inputs, non-bracketed inputs are required, a written `a|b` enumeration must match several `AllowedValues` exactly and in order, and `--flag=literal` binds one exact allowed value. Stdin, environment, and configuration inputs remain outside argv syntax matching.
 
 Every command declares the common runtime failures that its shared execution path can emit. `operation_canceled` is always present with its stable kind/retryability; commands with output also declare `output_write_failed`. A non-nil authentication requirement binds a command to the template `app/authn.Gate`, so the catalog additionally requires every standard gate fault with its exact kind and retryability; provider-specific faults remain explicit additions. Mutations similarly publish the standard invoker's contract and policy-rejection failures, including non-retryable `unclassified_mutation_outcome` with a read-only reconciliation action, so runtime normalization does not turn a predictable failure into `undeclared_fault_contract` or an unsafe retry.
 
 `next_actions[].command` uses a deliberately small executable grammar: an exact catalog command path, or `help` followed by one exact path or canonical namespace. Prefix-only matches, unknown help selectors, non-canonical whitespace, and unchecked argv suffixes fail catalog validation. A derived project that needs fixed arguments in recovery must first add a typed argument contract and parser-aware validation; it must not append plausible-looking prose to the command string.
 
-The agent-help, success-output, and error-output schemas are versioned independently from prose help. A derived project must increment or deliberately evolve the affected schema when changing its machine-readable shape. The catalog declaration and executable JSON must agree on `schema_version`, envelope, and item fields; contract tests compare them in both directions.
+The agent-help, success-output, and error-output schemas are versioned
+independently from prose help. A derived project must increment or deliberately
+evolve the affected schema when changing its machine-readable shape. For a JSON
+command result with one shape, the catalog declaration and executable JSON must
+agree on `schema_version`, envelope, and item fields; contract tests compare
+them in both directions.
+
+The help command has one deliberate input-selected variant rather than a
+generic catalog output-variant registry. Its `CommandOutput.Fields` declares
+the `commands[]` entries in root `view: index`. Supplying the optional selector
+returns the independent `view: scope` shape under the same agent-help schema
+version. Dedicated exact-key contract tests cover both root and scoped top-level
+objects and their command entries, rejecting missing and extra keys. A second
+command that needs input-selected result shapes is evidence to add catalog-owned
+variant metadata before exposing it, not to add another undocumented exception.
+
+In scoped agent-help schema 5, one workflow record names a reference kind and
+lists its unique producers and consumers. Sharing a kind already declares every
+producer value interchangeable at every listed consumer, so the document does
+not repeat their Cartesian product or duplicate it as command-local next
+actions. Structured error recovery remains in each declared fault's
+`next_actions`.
+
+The `scope_request` invocation counts bound only help discovery and retrieval of
+one selected task contract. An unknown outcome uses the root index plus one
+scoped-help request. A known path uses one scoped-help request when the caller
+already holds every required reference and other task input. The counts do not
+include authentication, task execution, producer discovery, or a later
+scoped-help request for the complete contract of a workflow endpoint outside
+the selected scope.
 
 Command names describe outcomes. Package names, SDK methods, URL paths, database tables, and protocol verbs are not automatically public vocabulary.
 
@@ -118,6 +156,27 @@ The sample reference kind is `sample`. `sample list` produces field `id`; `sampl
 
 If a common result requires a deterministic series of adapter calls, implement one application use case. Do not make every user or agent rediscover the sequence.
 
+### Close supported outcomes operationally
+
+A command that claims a supported user outcome owns the deterministic
+selection, joining, and interpretation required for routine success. Reading a
+declared JSON or TSV field is normal consumption. Requiring an undeclared
+`jq`/`grep` pipeline, custom parser, provider notation decoder, source
+inspection, or exploratory API call means the outcome is not yet closed.
+
+This rule does not prohibit a derived product from exposing a deliberately raw
+export or low-level utility. Such a surface must state its narrower outcome and
+must not stand in for a task that the product claims to complete.
+
+Application and domain results carry declared task identity and every request
+dimension the task actually has. They also retain reference kinds, explicit
+empty/zero/false state, and bounded uncertainty whenever those distinctions
+affect interpretation before the CLI renders them. A scoped collection retains
+scope even when empty. Presentation may omit only facts that its reviewed
+output contract declares redundant; it must not recover scope from the first
+item, strengthen an unresolved fact, or infer relationships from names,
+ordering, proximity, quoting, or indentation.
+
 ### Bound raw flexibility
 
 Arbitrary routes, opaque parameter maps, unrestricted scripts, and pass-through request bodies expand both the product and security surface. They are excluded unless a project's thesis explicitly makes raw transport the product.
@@ -149,6 +208,15 @@ Before expanding implementation, replace this document's generic content with an
 8. Which upstream capabilities remain internal or deferred?
 9. What compatibility and deprecation policy applies?
 10. Which authentication method, account model, credential source/storage, refresh/reuse behavior, and recovery workflow apply?
-11. Which timeout, retry/idempotency, pagination/completeness, schema-drift, and mutation-approval policies bound external I/O?
+11. Which timeout, retry/idempotency, delivery, collection coverage, pagination,
+    schema-drift, and mutation-approval policies bound external I/O?
+12. What is the routine-success external-processing count, and which declared
+    fields provide the answer and next canonical reference without custom
+    reconstruction?
+13. How are result task, request scope, reference kinds, absent/empty/zero/false
+    states, and uncertainty validated before presentation?
+14. If a capability is removed, what happens to its catalog entries,
+    dependencies, dormant fallbacks, credentials, and persisted non-secret
+    state?
 
 Update catalog contract tests when the resulting public surface changes.

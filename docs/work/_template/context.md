@@ -54,7 +54,8 @@ Record expected and observed results, platform, version, and bounded logs. Redac
 - Credentials or confidential data involved:
 - New dependencies, destinations, files, processes, or generated content:
 - External schema provenance, publication rights, and drift evidence:
-- Pagination, timeout, retry, idempotency, and cancellation facts:
+- Output delivery, collection coverage, pagination, timeout, retry, idempotency,
+  and cancellation facts:
 - Publication and licensing concerns:
 
 ## Glossary

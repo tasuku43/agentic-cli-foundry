@@ -33,6 +33,7 @@ var (
 	formulaPlaceholder    = regexp.MustCompile(`@@([A-Z0-9_]+)@@`)
 	inlineMarkdownLink    = regexp.MustCompile(`!?\[[^]\n]*\]\(([^)\n]*)\)`)
 	referenceMarkdownLink = regexp.MustCompile(`^\s*\[[^]\n]+\]:\s*(\S+)`)
+	workChecklistItem     = regexp.MustCompile(`^\s*(?:[-+*]|[0-9]{1,9}[.)])\s+\[([ xX])\]\s+`)
 	uriScheme             = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
 	authorizationSecret   = regexp.MustCompile(`(?i)authorization\s*:\s*(?:bearer|basic)\s+([A-Za-z0-9+/=_-]{8,})`)
 	assignmentSecret      = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_])["']?(?:api[_-]?key|client[_-]?secret|password|passwd|access[_-]?token|refresh[_-]?token|private[_-]?key)["']?\s*[:=]\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^# ,}\]\t\r\n]+))`)
@@ -116,6 +117,11 @@ func inspect(root, scope string) ([]issue, error) {
 	issues = append(issues, checkRequired(root, config, scope)...)
 	issues = append(issues, checkLicense(root, config, scope)...)
 	issues = append(issues, checkAgentHarness(root)...)
+	workIssues, err := checkWorkPackets(root, paths)
+	if err != nil {
+		return nil, err
+	}
+	issues = append(issues, workIssues...)
 	linkIssues, err := checkMarkdownLinks(root, paths)
 	if err != nil {
 		return nil, err
@@ -152,6 +158,583 @@ func inspect(root, scope string) ([]issue, error) {
 		return issues[i].Message < issues[j].Message
 	})
 	return issues, nil
+}
+
+type workMetadataValue struct {
+	Value string
+	Line  int
+}
+
+var acceptedWorkStatuses = map[string]bool{
+	"Draft":      true,
+	"Accepted":   true,
+	"Active":     true,
+	"Complete":   true,
+	"Superseded": true,
+}
+
+func checkWorkPackets(root string, repositoryPaths []string) ([]issue, error) {
+	available := make(map[string]bool, len(repositoryPaths))
+	var goals []string
+	for _, relative := range repositoryPaths {
+		available[relative] = true
+		parts := strings.Split(relative, "/")
+		if len(parts) == 4 && parts[0] == "docs" && parts[1] == "work" && parts[3] == "goal.md" {
+			goals = append(goals, relative)
+		}
+	}
+	sort.Strings(goals)
+
+	var issues []issue
+	successorEdges := make(map[string]string)
+	for _, goalPath := range goals {
+		data, err := readRegularRepositoryFile(root, goalPath)
+		if err != nil {
+			return nil, err
+		}
+		text := string(data)
+		statuses := workMetadata(text, "Status")
+		if len(statuses) != 1 {
+			issues = append(issues, issue{Path: goalPath, Message: "work goal must declare exactly one Status metadata field"})
+			continue
+		}
+		status := statuses[0]
+		if !acceptedWorkStatuses[status.Value] {
+			issues = append(issues, issue{Path: goalPath, Line: status.Line, Message: "work goal Status must be one of Draft, Accepted, Active, Complete, or Superseded"})
+			continue
+		}
+
+		successors := workMetadata(text, "Successor")
+		if len(successors) > 1 {
+			issues = append(issues, issue{Path: goalPath, Message: "work goal must not declare Successor more than once"})
+		}
+		if status.Value == "Complete" {
+			issues = append(issues, checkCompletedWorkPacket(root, goalPath, text, available)...)
+		}
+		if status.Value == "Superseded" {
+			target, successorIssues := checkSupersededWorkPacket(root, goalPath, successors, available)
+			issues = append(issues, successorIssues...)
+			if len(successorIssues) == 0 {
+				successorEdges[goalPath] = target
+			}
+		}
+	}
+	issues = append(issues, checkWorkSuccessorCycles(successorEdges)...)
+	return issues, nil
+}
+
+func checkCompletedWorkPacket(root, goalPath, goalText string, available map[string]bool) []issue {
+	var issues []issue
+	found, total, unchecked := workChecklist(goalText, "## Acceptance criteria")
+	if !found || total == 0 {
+		issues = append(issues, issue{Path: goalPath, Message: "Complete work goal must contain acceptance criteria checkboxes"})
+	} else {
+		for _, line := range unchecked {
+			issues = append(issues, issue{Path: goalPath, Line: line, Message: "Complete work goal has an unchecked acceptance criterion"})
+		}
+	}
+
+	tasksPath := pathpkg.Join(pathpkg.Dir(goalPath), "tasks.md")
+	if !available[tasksPath] {
+		return append(issues, issue{Path: tasksPath, Message: "Complete work packet must include tasks.md"})
+	}
+	data, err := readRegularRepositoryFile(root, tasksPath)
+	if err != nil {
+		return append(issues, issue{Path: tasksPath, Message: err.Error()})
+	}
+	_, total, unchecked = workChecklist(string(data), "")
+	if total == 0 {
+		issues = append(issues, issue{Path: tasksPath, Message: "Complete work packet tasks.md must contain task checkboxes"})
+	}
+	for _, line := range unchecked {
+		issues = append(issues, issue{Path: tasksPath, Line: line, Message: "Complete work packet has an unchecked task"})
+	}
+	return issues
+}
+
+func checkSupersededWorkPacket(root, goalPath string, successors []workMetadataValue, available map[string]bool) (string, []issue) {
+	if len(successors) != 1 || strings.EqualFold(successors[0].Value, "none") || successors[0].Value == "" {
+		return "", []issue{{Path: goalPath, Message: "Superseded work goal must declare one explicit Successor path"}}
+	}
+	metadata := successors[0]
+	raw := workTrimASCIIHorizontal(metadata.Value)
+	if raw == "" || strings.TrimSpace(raw) != raw || strings.ContainsAny(raw, "\\?#") || strings.Contains(raw, "](") || strings.HasPrefix(raw, "/") || uriScheme.MatchString(raw) || pathpkg.Clean(raw) != raw {
+		return "", []issue{{Path: goalPath, Line: metadata.Line, Message: "Superseded work goal Successor must be one canonical raw relative path"}}
+	}
+	resolved := pathpkg.Clean(pathpkg.Join(pathpkg.Dir(goalPath), raw))
+	parts := strings.Split(resolved, "/")
+	if resolved == goalPath || len(parts) != 4 || parts[0] != "docs" || parts[1] != "work" || parts[2] == "_template" || parts[3] != "goal.md" {
+		return "", []issue{{Path: goalPath, Line: metadata.Line, Message: "Superseded work goal Successor must target another non-template docs/work/<name>/goal.md"}}
+	}
+	if !available[resolved] {
+		return "", []issue{{Path: goalPath, Line: metadata.Line, Message: fmt.Sprintf("Superseded work goal Successor %q is not a repository work goal", resolved)}}
+	}
+	if _, err := readRegularRepositoryFile(root, resolved); err != nil {
+		return "", []issue{{Path: goalPath, Line: metadata.Line, Message: fmt.Sprintf("Superseded work goal Successor is not a regular repository file: %v", err)}}
+	}
+	return resolved, nil
+}
+
+func checkWorkSuccessorCycles(edges map[string]string) []issue {
+	starts := make([]string, 0, len(edges))
+	for start := range edges {
+		starts = append(starts, start)
+	}
+	sort.Strings(starts)
+	reported := make(map[string]bool)
+	var issues []issue
+	for _, start := range starts {
+		positions := make(map[string]int)
+		var chain []string
+		current := start
+		for {
+			if position, exists := positions[current]; exists {
+				cycle := append([]string(nil), chain[position:]...)
+				sortedCycle := append([]string(nil), cycle...)
+				sort.Strings(sortedCycle)
+				key := strings.Join(sortedCycle, "\x00")
+				if !reported[key] {
+					reported[key] = true
+					issues = append(issues, issue{
+						Path:    sortedCycle[0],
+						Message: "Superseded work goal Successor chain contains a cycle: " + strings.Join(cycle, " -> ") + " -> " + current,
+					})
+				}
+				break
+			}
+			positions[current] = len(chain)
+			chain = append(chain, current)
+			next, exists := edges[current]
+			if !exists {
+				break
+			}
+			current = next
+		}
+	}
+	return issues
+}
+
+func workMetadata(text, name string) []workMetadataValue {
+	scanner := workMarkdownScanner{}
+	foundH1 := false
+	inBlock := false
+	var values []workMetadataValue
+	for index, raw := range strings.Split(text, "\n") {
+		line, visible := scanner.visible(raw)
+		if !visible {
+			if foundH1 {
+				break
+			}
+			continue
+		}
+		if !foundH1 {
+			if workH1(line) {
+				foundH1 = true
+			}
+			continue
+		}
+		if !inBlock && workASCIIBlankLine(line) {
+			continue
+		}
+		key, value, metadata := workMetadataLine(line)
+		if !metadata {
+			break
+		}
+		inBlock = true
+		if key == name {
+			values = append(values, workMetadataValue{Value: value, Line: index + 1})
+		}
+	}
+	return values
+}
+
+func workH1(line string) bool {
+	rest, ok := workFenceIndent(line)
+	return ok && (rest == "#" || strings.HasPrefix(rest, "# "))
+}
+
+func workMetadataLine(line string) (string, string, bool) {
+	if !strings.HasPrefix(line, "- ") {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(line, "- ")
+	delimiter := strings.IndexByte(rest, ':')
+	if delimiter <= 0 {
+		return "", "", false
+	}
+	key := rest[:delimiter]
+	if !workMetadataKey(key) {
+		return "", "", false
+	}
+	return key, workTrimASCIIHorizontal(rest[delimiter+1:]), true
+}
+
+func workMetadataKey(key string) bool {
+	if key == "" || key[0] < 'A' || (key[0] > 'Z' && key[0] < 'a') || key[0] > 'z' {
+		return false
+	}
+	for _, value := range []byte(key) {
+		if (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == ' ' || value == '-' || value == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func workChecklist(text, section string) (bool, int, []int) {
+	found := section == ""
+	inside := found
+	scanner := workMarkdownScanner{}
+	total := 0
+	var unchecked []int
+	for index, raw := range strings.Split(text, "\n") {
+		line, visible := scanner.visible(raw)
+		if !visible {
+			continue
+		}
+		headingLine := strings.TrimRight(line, " \t")
+		if section != "" {
+			if headingLine == section {
+				found = true
+				inside = true
+				continue
+			}
+			if strings.HasPrefix(headingLine, "## ") {
+				inside = false
+				continue
+			}
+		}
+		if !inside {
+			continue
+		}
+		if !scanner.listItem {
+			continue
+		}
+		match := workChecklistItem.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		total++
+		if match[1] == " " {
+			unchecked = append(unchecked, index+1)
+		}
+	}
+	return found, total, unchecked
+}
+
+type workMarkdownScanner struct {
+	inHTMLComment bool
+	inlineCode    int
+	fenceMarker   byte
+	fenceLength   int
+	fenceBase     int
+	container     int
+	listItem      bool
+}
+
+func (s *workMarkdownScanner) visible(raw string) (string, bool) {
+	s.listItem = false
+	raw = strings.TrimSuffix(raw, "\r")
+	if s.fenceMarker != 0 {
+		line, ok := workRemoveContainerIndent(raw, s.fenceBase)
+		if ok && workFenceClose(line, s.fenceMarker, s.fenceLength) {
+			s.fenceMarker = 0
+			s.fenceLength = 0
+			s.fenceBase = 0
+		}
+		return "", false
+	}
+
+	if !s.inHTMLComment && workASCIIBlankLine(raw) {
+		s.inlineCode = 0
+		return raw, true
+	}
+	leadingRaw := workLeadingColumns(raw)
+	commentBase := 0
+	if s.container > 0 && leadingRaw >= s.container {
+		commentBase = s.container
+	}
+	line := raw
+	if leadingRaw-commentBase < 4 {
+		line = s.withoutHTMLComments(raw)
+	}
+	if workASCIIBlankLine(line) {
+		return line, true
+	}
+	leading := workLeadingColumns(line)
+	if s.container > 0 && leading < s.container {
+		s.container = 0
+	}
+	candidate := line
+	base := 0
+	if s.container > 0 && leading >= s.container {
+		if stripped, ok := workRemoveContainerIndent(line, s.container); ok {
+			candidate = stripped
+			base = s.container
+		}
+	}
+	if marker, length, opens := workFenceOpen(candidate); opens {
+		s.inlineCode = 0
+		s.fenceMarker = marker
+		s.fenceLength = length
+		s.fenceBase = base
+		return "", false
+	}
+	if indent, listItem := workListContentIndent(line, s.container); listItem {
+		s.container = indent
+		s.listItem = true
+	}
+	return line, true
+}
+
+func (s *workMarkdownScanner) withoutHTMLComments(line string) string {
+	var visible strings.Builder
+	rest := line
+	for {
+		if s.inHTMLComment {
+			end := strings.Index(rest, "-->")
+			if end < 0 {
+				workWriteCommentMask(&visible, rest)
+				return visible.String()
+			}
+			workWriteCommentMask(&visible, rest[:end+3])
+			rest = rest[end+3:]
+			s.inHTMLComment = false
+			continue
+		}
+		start, codeTicks := workHTMLCommentStart(rest, s.inlineCode)
+		s.inlineCode = codeTicks
+		if start < 0 {
+			visible.WriteString(rest)
+			return visible.String()
+		}
+		visible.WriteString(rest[:start])
+		rest = rest[start:]
+		s.inHTMLComment = true
+	}
+}
+
+func workHTMLCommentStart(line string, codeTicks int) (int, int) {
+	for index := 0; index < len(line); {
+		if codeTicks == 0 && strings.HasPrefix(line[index:], "<!--") {
+			if !workEscapedAt(line, index) {
+				return index, codeTicks
+			}
+			index += len("<!--")
+			continue
+		}
+		if line[index] != '`' || (codeTicks == 0 && workEscapedAt(line, index)) {
+			index++
+			continue
+		}
+		run := workBacktickRun(line, index)
+		if codeTicks == 0 {
+			codeTicks = run
+		} else if run == codeTicks {
+			codeTicks = 0
+		}
+		index += run
+	}
+	return -1, codeTicks
+}
+
+func workEscapedAt(line string, index int) bool {
+	backslashes := 0
+	for index > 0 && line[index-1] == '\\' {
+		backslashes++
+		index--
+	}
+	return backslashes%2 == 1
+}
+
+func workBacktickRun(line string, start int) int {
+	length := 0
+	for start+length < len(line) && line[start+length] == '`' {
+		length++
+	}
+	return length
+}
+
+func workWriteCommentMask(visible *strings.Builder, value string) {
+	for index := 0; index < len(value); index++ {
+		if value[index] == '\t' {
+			visible.WriteByte('\t')
+		} else {
+			visible.WriteByte(' ')
+		}
+	}
+}
+
+func workASCIIBlankLine(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] != ' ' && value[index] != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+func workTrimASCIIHorizontal(value string) string {
+	return strings.Trim(value, " \t")
+}
+
+func workListContentIndent(line string, container int) (int, bool) {
+	if container > 0 {
+		if indent, ok := workListContentIndentAt(line, container); ok {
+			return indent, true
+		}
+	}
+	return workListContentIndentAt(line, 0)
+}
+
+func workListContentIndentAt(line string, base int) (int, bool) {
+	rest, ok := workRemoveContainerIndent(line, base)
+	if !ok {
+		return 0, false
+	}
+	marker, column := workLeadingIndent(rest, base)
+	if column-base > 3 || marker == len(rest) {
+		return 0, false
+	}
+	if rest[marker] == '-' || rest[marker] == '+' || rest[marker] == '*' {
+		marker++
+		column++
+	} else {
+		start := marker
+		for marker < len(rest) && marker-start < 9 && rest[marker] >= '0' && rest[marker] <= '9' {
+			marker++
+			column++
+		}
+		if marker == start || marker >= len(rest) || (rest[marker] != '.' && rest[marker] != ')') {
+			return 0, false
+		}
+		marker++
+		column++
+	}
+	spacingStart := column
+	for marker < len(rest) && (rest[marker] == ' ' || rest[marker] == '\t') && column-spacingStart < 4 {
+		next := column + 1
+		if rest[marker] == '\t' {
+			next = workNextTabStop(column)
+		}
+		if next-spacingStart > 4 {
+			break
+		}
+		column = next
+		marker++
+	}
+	if column == spacingStart {
+		return 0, false
+	}
+	return column, true
+}
+
+func workLeadingColumns(line string) int {
+	_, column := workLeadingIndent(line, 0)
+	return column
+}
+
+func workLeadingIndent(line string, startColumn int) (int, int) {
+	index := 0
+	column := startColumn
+	for index < len(line) {
+		switch line[index] {
+		case ' ':
+			column++
+		case '\t':
+			column = workNextTabStop(column)
+		default:
+			return index, column
+		}
+		index++
+	}
+	return index, column
+}
+
+func workNextTabStop(column int) int {
+	return column + 4 - column%4
+}
+
+func workRemoveContainerIndent(line string, indent int) (string, bool) {
+	if indent == 0 {
+		return line, true
+	}
+	index := 0
+	column := 0
+	for index < len(line) && column < indent {
+		switch line[index] {
+		case ' ':
+			column++
+		case '\t':
+			column = workNextTabStop(column)
+		default:
+			return "", false
+		}
+		index++
+	}
+	if column < indent {
+		return "", false
+	}
+	leadingBytes, endColumn := workLeadingIndent(line[index:], column)
+	return strings.Repeat(" ", endColumn-indent) + line[index+leadingBytes:], true
+}
+
+func workFenceOpen(line string) (byte, int, bool) {
+	rest, ok := workFenceIndent(line)
+	if !ok || len(rest) < 3 || (rest[0] != '`' && rest[0] != '~') {
+		return 0, 0, false
+	}
+	marker := rest[0]
+	length := 0
+	for length < len(rest) && rest[length] == marker {
+		length++
+	}
+	if length < 3 || (marker == '`' && strings.ContainsRune(rest[length:], '`')) {
+		return 0, 0, false
+	}
+	return marker, length, true
+}
+
+func workFenceClose(line string, marker byte, minimum int) bool {
+	rest, ok := workFenceIndent(line)
+	if !ok {
+		return false
+	}
+	length := 0
+	for length < len(rest) && rest[length] == marker {
+		length++
+	}
+	return length >= minimum && workASCIIFenceSpace(rest[length:])
+}
+
+func workASCIIFenceSpace(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] != ' ' && value[index] != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+func workFenceIndent(line string) (string, bool) {
+	index, columns := workLeadingIndent(line, 0)
+	if columns > 3 {
+		return "", false
+	}
+	return line[index:], true
+}
+
+func readRegularRepositoryFile(root, relative string) ([]byte, error) {
+	if err := validateRepositoryPaths(root, []string{relative}); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(root, filepath.FromSlash(relative))
+	data, err := os.ReadFile(path) // #nosec G304 -- relative is validated as a local regular repository path above.
+	if err != nil {
+		return nil, fmt.Errorf("read repository path %q: %w", relative, err)
+	}
+	return data, nil
 }
 
 func checkLicense(root string, config projectconfig.Config, scope string) []issue {

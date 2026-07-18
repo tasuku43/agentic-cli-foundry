@@ -35,6 +35,12 @@ Confirm:
 - stdout, stderr, exit status, and machine-readable output are predictable;
 - all side effects and external destinations are named.
 - the command's stable capability ID is `public` in `.harness/capabilities.json`, or the upstream capability remains explicitly `internal`, `deferred`, or `excluded` with a reason.
+- routine success needs zero undeclared external-processing steps: extracting a
+  declared JSON/TSV field is allowed, but an extra `jq`/`grep` join, custom
+  parser, provider-notation decoder, source inspection, or exploratory API call
+  means the supported outcome is not operationally closed;
+- any deliberately raw export or low-level utility states that narrower outcome
+  explicitly instead of standing in for a composed user task.
 
 If the thesis does not decide a design trade-off, update the thesis or an
 architecture decision before implementation.
@@ -61,6 +67,15 @@ Keep policy out of transport adapters and presentation code. Inject clocks,
 filesystems, environment reads, network clients, and side-effect executors at
 the narrowest useful boundary.
 
+Validate adapter results before presentation. A task result must belong to the
+declared task and every request dimension that task actually carries: target,
+parent, and/or scope. A scoped collection's task-owned result retains scope even
+when empty. Keep absent, explicit empty, zero, false, and unresolved states
+distinct when they affect interpretation. Validate every returned opaque value
+against the reference kind required by its semantic field, not merely a shared
+byte shape. Presentation represents these facts and must not infer them from a
+display name, order, proximity, quoting, or indentation.
+
 ## 3. Declare the operation contract
 
 For every external action, specify:
@@ -72,7 +87,8 @@ For every external action, specify:
 - for reference-bound write, one required argument/flag opaque `target_id_input` whose reference kind equals `TargetKind`, plus an optional distinct opaque parent role whose input is required when present; `target_inputs` contains only those bound roles;
 - for a fixed-target mutation, an explicit empty `target_inputs`, no input-role fields, and a `TargetKind` matching the fixed target kind; create uses it as scope and write as the existing target;
 - validation performed before the external boundary;
-- finite timeout, pagination/completeness, maximum attempts, and upstream idempotency behavior;
+- finite timeout, delivery, collection coverage, pagination, maximum attempts,
+  and upstream idempotency behavior;
 - which derived policy applies at `app/execution.Invoker`; do not make the template assume approval, confirmation, OS authentication, or dry-run;
 - audit-safe fields and secret fields;
 - allowed network destination.
@@ -85,13 +101,22 @@ command must not create a second raw transport or bypass validation.
 Add the command to the canonical catalog and derive dispatch and help from that
 entry. Complete its `AgentContract`: stable capability ID, user outcome,
 described inputs and allowed values, formats, fields/types/descriptions,
-completeness, non-auth prerequisites, optional secret-free authentication
+delivery, collection coverage, non-auth prerequisites, optional secret-free authentication
 requirement, stable faults with exact next commands, and mutation contract when
 applicable. Nil collections mean unknown and are invalid; use explicit empty
 collections for known none.
 
-For `complete` output, do not declare a pagination binding. For deliberately
-`paged` output, declare `AgentContract.Pagination` with the exact optional
+Declare delivery independently from collection coverage. `complete` delivery
+returns the entire task-selected result or no success; it does not by itself
+claim exhaustive provider history. Use `not_applicable` for a scalar, single
+object, or no output; `exhaustive` for the exact declared task scope and
+observation; `bounded_window` for a fully delivered finite/latest/provider-capped
+window; and `differential_window` for a change window since an explicit
+checkpoint. Keep concrete limits, checkpoints, ordering, and uncertainty in the
+task result.
+
+For `complete` delivery, do not declare a pagination binding. For deliberately
+`paged` delivery, declare `AgentContract.Pagination` with the exact optional
 cursor argument/flag and exact top-level string cursor output field. The cursor
 is emitted beside `schema_version` and the JSON envelope; `CommandOutput.Fields`
 describe only values inside the envelope. Both cursor endpoints must use one
@@ -99,7 +124,7 @@ dedicated opaque reference kind, and no extra input or output may reuse that
 cursor kind. A paged command supports only JSON and defaults to JSON. Pass the
 emitted cursor back unchanged. Declare the only supported completion rule,
 `completion: "empty_cursor"`, and emit the top-level cursor on every successful
-page. An empty string is complete; omission, JSON `null`, and non-string values
+page. A paged collection cannot declare `not_applicable`. An empty string is complete; omission, JSON `null`, and non-string values
 are contract failures. Do not use `paged` to make silent truncation or a local
 traversal limit look successful.
 
@@ -109,8 +134,11 @@ optional or non-CLI target, duplicate or extra target input, non-reference input
 a catalog error. Do not defer that ambiguity to command parsing, policy, or the
 adapter.
 
-Do not hand-maintain `ProducedRef` or `ConsumedRef`. Reference compatibility,
-workflows, and next actions derive from structured input/output reference kinds.
+Do not hand-maintain `ProducedRef` or `ConsumedRef`. The catalog derives
+reference compatibility, the reference graph, grouped workflows, and those
+producer/consumer projections from structured input/output reference kinds.
+Fault recovery `next_actions` are not reference adjacency: declare them
+explicitly on each stable fault and validate their executable commands.
 An act command must either require at least one opaque reference or declare one complete `tool_local` fixed target, never both. A fixed-target act produces and consumes no references. Give semantically
 different references different kinds; sharing a kind declares them
 interchangeable across every matching field/input edge. Ensure required
@@ -123,6 +151,14 @@ Root help must not regain inputs, output detail, authentication, errors,
 mutation facts, or workflows as the catalog grows, and each encoded command
 entry must remain within the 512-byte catalog budget.
 
+Treat `scope_request` invocation counts as help-discovery bounds only. An
+unknown outcome needs the root index plus one selected scoped contract. A known
+path needs one scoped-help invocation when the caller already holds every
+required reference and other task input. These counts exclude authentication,
+task execution, producer discovery, and any later scoped-help request needed to
+retrieve the complete contract of a workflow endpoint outside the selected
+scope.
+
 Keep every recovery `command` executable under the template's small grammar:
 use one exact catalog path, or `help` plus an exact path/canonical namespace.
 Do not append flags, values, or guessed selectors. If a derived product needs a
@@ -130,14 +166,32 @@ fixed argument-bearing recovery, introduce a typed argument contract and
 parser-aware validation before publishing it.
 
 Add bidirectional contract tests so every public catalog entry has a dispatch,
-help, and fixture, and no removed or internal entry remains exposed. For JSON,
-compare the executable schema version, envelope, and item keys with
-`CommandOutput`; do not accept a declaration-only or renderer-only change.
+help, and fixture, and no removed or internal entry remains exposed. For a JSON
+result with one shape, compare the executable schema version, envelope, and
+item keys with `CommandOutput`; do not accept a declaration-only or
+renderer-only change.
+
+The template help command is the one deliberate input-selected variant:
+`CommandOutput.Fields` describes root `view: index` command entries, while a
+selector returns an independent `view: scope` shape under the same agent-help
+schema version. Exact-key contract tests cover both views and reject both
+missing and extra keys. Do not add generic output-variant metadata for this
+single command. If another command needs input-selected result shapes, revisit
+the catalog abstraction before exposing it rather than multiplying exceptions.
+
+For an output-contract change, audit the finite set of task-owned semantic
+result variants rather than a sample of provider routes. Record which facts are
+kept or omitted and why. Preserve canonical references, every applicable
+request dimension, trust framing, recovery facts, interpretation-relevant
+empty/zero/false values, and bounded uncertainty unless the public contract
+deliberately changes them. Add a negative canary so a removed non-contract field
+cannot silently return.
 
 Keep command paths disjoint from their word-boundary namespaces. Match argv
-`Required` flags to bracketed versus non-bracketed usage syntax and keep a
-written `a|b` list exactly aligned with `AllowedValues`; do not apply this
-grammar to stdin, environment, or configuration inputs. Declare the common
+`Required` flags to bracketed versus non-bracketed usage syntax, keep a written
+`a|b` list exactly aligned with multiple `AllowedValues`, and use
+`--flag=literal` for one exact allowed value; do not apply this grammar to stdin,
+environment, or configuration inputs. Declare the common
 cancellation/output failures and, for mutations, every standard invoker
 contract or policy failure before exposing the command.
 
@@ -211,10 +265,29 @@ Add the smallest set that proves the capability:
 - hostile-output tests for ESC/newline, bidi and zero-width format characters, U+2028/U+2029, pre-existing backslashes, JSON-looking and prompt-like printable data, oversized content, and writer failure;
 - tests proving structural escaping does not claim to filter semantic instructions and does not change an opaque reference;
 - regression fixtures for stable TSV/JSON output and structured error output.
+- for each interpretation-sensitive capability, task-result tests covering its
+  declared task identity and every request dimension it actually carries,
+  empty-collection scope when scoped, interpretation-relevant state
+  distinctions, contextual reference kinds where semantic reference fields
+  exist, and no partial success from an invalid adapter result;
+- for capabilities whose output could invite display-only inference,
+  negative-inference canaries proving names, prose, ordering, proximity,
+  quotation, and indentation cannot create identity or relationships that are
+  absent from typed semantic facts;
 - for setup or authentication UX, a work-packet scorecard comparing environment exports, fixed-value re-entry, terminal/browser transfers, clipboard/OS dependencies, non-selecting discover/act trips, first-run and steady-state commands, and ceremonial inputs; retain steps justified by safety or certainty.
 
 Tests must use temporary directories, fixed clocks, fake credentials, and local
 test servers. They must not require a developer account or live network.
+
+For a significant default text or agent-presentation change, use one frozen,
+presentation-independent typed fixture and a machine-readable answer key. The
+evidence packet records exact next argv, negative-inference canaries, before and
+after goldens generated from the same fixture, fixture hashes, byte counts, and
+any pinned tokenizer/version. Semantic correctness and canonical-reference
+reuse are eligibility gates before size or token evidence. Keep invalidated,
+failed, and inconclusive runs, and separate a benchmark result from the product
+owner's compatibility decision. Do not put live-model evaluation in the
+canonical completion gate.
 
 ## 7. Keep claims enforceable
 
@@ -239,10 +312,24 @@ stored identity-ready value `profile: ready` in `.harness/project.json`.
 Replay the relevant scenario from `docs/09_agent_readiness_validation.md`.
 Record how many invocations were needed to discover the task, where each input
 came from, whether output passed unchanged into the next task, and whether each
-failure selected a next command without prose interpretation. Extra command
-guesses are thesis/product evidence, not an agent workaround to document.
+failure selected a next command without prose interpretation. Also record the
+routine-success external-processing count; declared field extraction counts as
+consumption, while a custom join/parser, provider-notation interpretation,
+source inspection, or exploratory request counts as external reconstruction.
+Extra command guesses or reconstruction are thesis/product evidence, not an
+agent workaround to document.
 
-## 9. Feed implementation learning back into the thesis
+## 9. Retire a capability deliberately
+
+Removal is a product and security change, not dead-code cleanup. Update the
+capability ledger and prove that removed commands, faults, recovery actions,
+configuration selectors, dependencies, and dormant fallbacks are no longer
+reachable. Decide explicitly whether persisted secret and non-secret state is
+ignored, migrated, or removed by a dedicated cleanup action; unrelated commands
+must not silently delete legacy state. Preserve the evidence that justified the
+retirement and mark superseded work packets or ADRs with their successor.
+
+## 10. Feed implementation learning back into the thesis
 
 Implementation is an iterative design probe. When code or tests reveal a new
 constraint, do not leave the decision only in a local comment. Revisit the

@@ -69,7 +69,25 @@ The template also rejects every third-party import from `cmd` and `internal/cli`
 
 ### `tools/repoguard`
 
-Repository guard checks public-boundary and repository-shape policy, including bootstrap state, forbidden identifiers, likely secrets, invalid or leftover identity, and required public files. Its publishable path set comes from a successful Git enumeration. Tracked paths already absent from the working tree are omitted so an unstaged bootstrap rename is valid, while untracked destinations remain included. Git errors, symbolic links, special files, and other inspection errors still fail closed. A derived project extends its policy when it adds credentials, private migrations, generated content, or publication constraints.
+Repository guard checks public-boundary and repository-shape policy, including bootstrap state, forbidden identifiers, likely secrets, invalid or leftover identity, work-packet lifecycle consistency, and required public files. Its publishable path set comes from a successful Git enumeration. Tracked paths already absent from the working tree are omitted so an unstaged bootstrap rename is valid, while untracked destinations remain included. Git errors, symbolic links, special files, and other inspection errors still fail closed. A derived project extends its policy when it adds credentials, private migrations, generated content, or publication constraints.
+
+Work-goal status is one of `Draft`, `Accepted`, `Active`, `Complete`, or
+`Superseded`. `Accepted` remains a valid pre-execution state for existing
+derived histories; new work may move directly from Draft to Active. Complete
+requires every acceptance checkbox in every visible Acceptance section and
+every task checkbox to be checked across the standard GFM unordered and ordered
+list markers. Metadata is read only from the contiguous top-level
+`- Key: value` block directly below the first top-level ATX H1 (`# ...`).
+Fenced examples and HTML comments do not supply metadata, headings, or
+checkboxes; valid top-level and list-container CommonMark fences are
+recognized. A
+Superseded goal names one canonical raw relative path to a non-template
+repository goal, and its successor chain must terminate rather than cycle. The
+guard reads each goal and successor through the same regular-file/no-symlink
+repository boundary. When adopting this guard in an existing derived
+repository, maintainers must review an inconsistent historical Complete packet
+and either supply its evidence, return it to Active, or supersede it explicitly.
+A migration must not check boxes automatically.
 
 ### `tools/contractlint`
 
@@ -109,19 +127,48 @@ The test suite has complementary levels:
 
 - Domain tests fix pure invariants.
 - Application tests fix task interpretation, orchestration, and ambiguity behavior.
+- Each interpretation-sensitive capability adds task-owned semantic-result
+  tests for its declared task identity and the target, parent, and/or scope
+  dimensions it actually carries. The tests preserve scoped empty collections
+  and interpretation-relevant state distinctions, reject field/reference-kind
+  laundering where multiple kinds exist, and add negative-inference canaries
+  where display details could be mistaken for facts. The template sample
+  mechanically covers exact-ID binding, repository target mismatch, successful
+  empty output, same-label identity separation, and no partial pagination
+  result; it is not a universal result type.
 - Authentication, pagination, and mutation-boundary tests prove rejection/cancellation before downstream calls, exact secret-free authentication binding, complete standard runtime-fault declarations, and complete-or-no-result behavior.
-- Catalog pagination tests require an exact optional-input/top-level-string-output opaque cursor binding, typed empty-cursor completion, and JSON-only presentation for `paged` results, and forbid that binding for `complete` results. Renderer fixtures reject an omitted, null, or non-string cursor.
+- Catalog output tests validate `complete|paged` delivery independently from
+  `not_applicable|exhaustive|bounded_window|differential_window` collection
+  coverage. Pagination tests require an exact optional-input/top-level-string
+  opaque cursor binding, typed empty-cursor completion, and JSON-only
+  presentation for paged delivery, forbid that binding for complete delivery,
+  and reject paged plus `not_applicable`. Renderer fixtures reject an omitted,
+  null, or non-string cursor.
 - Infrastructure tests fix protocol conversion and boundary failure.
 - CLI tests fix routing, help, rendering, and exit behavior.
-- Agent-help shape and size-growth tests keep root discovery index-only while scoped help retains the complete invocation and recovery contract.
-- JSON-output contract tests compare each built-in renderer's schema version, envelope, and item keys with its catalog `CommandOutput` declaration, and enforce the always-present string cursor for any paged probe.
+- Agent-help shape, edge-equivalence, and derived-scale size tests keep root
+  discovery index-only while grouped scoped workflows retain the complete
+  invocation, reference, and recovery contract without producer/consumer
+  Cartesian growth.
+- JSON-output contract tests compare each single-shape built-in renderer's
+  schema version, envelope, and item keys with its catalog `CommandOutput`
+  declaration and enforce the always-present string cursor for any paged probe.
+  Help's catalog fields describe root `view: index`; separate exact-key tests
+  cover both that view and the input-selected `view: scope` variant.
 - Adversarial output tests keep TSV/JSON records and stdout/stderr ownership intact across controls, Unicode format/line separators, existing backslashes, and printable prompt-like data while preserving opaque IDs exactly.
 - Catalog tests scan every public command for completeness and unique paths.
-- Catalog syntax tests reject command/namespace prefix collisions, usage/`Required`/`AllowedValues` drift, and missing common runtime failure declarations.
+- Catalog syntax tests reject command/namespace prefix collisions,
+  bracket/`a|b`/exact-literal usage drift from `Required`/`AllowedValues`,
+  fault-code signature conflicts across command and agent-help global errors,
+  and missing common runtime failure declarations.
 - Reference-graph tests connect discover producers to act consumers by kind and exact field/argument declarations.
 - Opaque-ID round-trip tests pass discovery output unchanged into action input.
 - Negative tests prove rejection before side effects.
 - Release tests inspect actual artifacts and metadata, not only workflow text.
+- Work-packet tests retain the Accepted compatibility state; reject unsupported
+  status, unchecked GFM acceptance/tasks, malformed fence evasion, template or
+  cyclic successor chains, and missing successors; and retain
+  regular-file/no-symlink repository policy.
 
 A global coverage percentage is not a substitute for these contracts. Add tests at the boundary where a future regression would otherwise pass unnoticed.
 
@@ -134,19 +181,23 @@ Every strong statement should identify its enforcement path.
 | Layer dependency | Go-aware architecture lint and import-boundary tests |
 | Finite domain state | Types, constructors, and table-driven negative tests |
 | Catalog completeness | Whole-catalog contract tests |
+| Output delivery versus collection coverage | Independent finite enums and catalog tests, including complete bounded/differential windows and paged exhaustive traversal |
+| Operationally closed supported outcome | Reviewed agent-readiness transcript with zero undeclared external reconstruction, plus task-owned deterministic-composition tests and declared field extraction |
+| Request-bound semantic result | Per-capability domain/application tests for declared task identity and every applicable request dimension; the sample proves exact-ID/mismatch/empty/no-partial behavior, while scoped or relationship-rich capabilities add their own scope, state, contextual-kind, and negative-inference fixtures |
 | Action target composition | Reachable reference-graph validation and byte-preserving round trips for reference-bound acts; complete, exclusive, reference-free declarations for command-bound fixed targets |
 | Side-effect ordering | Fake adapter counters and failure-before-I/O tests |
 | Mutation outcome classification | Structured-fault-first/cause-stripping tests, non-retryable unclassified outcome fallback, and read-only recovery validation |
 | Authentication precondition | Secret-free session contract, zero-downstream-call tests, and catalog validation of every standard gate fault's code/kind/retryability |
 | Authentication binding | Opaque JSON-excluded/fmt-redacted binding type, infrastructure-only issuance lint, exact pass-through test, and derived two-account/stale-binding/refresh-race adapter fixtures |
 | Pagination completeness | Cursor loop/budget/cancellation tests, retryability/catalog agreement, and no-partial-result assertion |
-| Public paged continuation | Catalog validation of one exact same-kind optional input/top-level output binding, JSON-only presentation, and agent-help/reference-workflow projection |
+| Public paged continuation | Catalog validation of one exact same-kind optional input/top-level output binding, non-`not_applicable` coverage, JSON-only presentation, and agent-help/reference-workflow projection |
 | Non-secret authentication configuration | Bounded strict codec, unknown-schema and unsafe-file rejection, atomic replacement, fail-closed source precedence, and read-only status tests |
 | Human authentication handoff | Agent-readiness records environment exports, re-entry, browser/terminal transfers, OS integration, ceremonial inputs, and first-run/steady-state invocations |
 | Retry safety | Timeout/attempt/idempotency validation and adapter contract tests |
 | Agent recovery | Catalog fault declarations, exact-path/help-selector executable grammar tests, and structured error snapshots |
-| Bounded root discovery | Fixed root-index shape, 512-byte per-command entry validation, and 100-command growth/selection tests |
+| Bounded agent discovery | Fixed root-index shape, 512-byte per-command entry validation, 100-command growth/selection tests, and a derived-scale grouped-workflow whole-response budget with edge-equivalence checks |
 | Meaningful derived identity | Field-level `ReadyProblems` tests that reject unchanged runnable/user-facing identity while allowing owner/license reuse, plus protected-defaults bootstrap tests |
+| Work-packet lifecycle consistency | Repository validation of finite status, all GFM completion checkboxes, CommonMark fence handling, explicit non-template acyclic supersession, and regular-file paths |
 | Bootstrap working-tree paths | Temporary-Git deletion/untracked-destination regression, successful Git enumeration requirement, selected-path no-link/regular-file validation, and full shape scan |
 | Local Go consistency | Gate preflight comparison of required/reported/compiler versions and GOROOT/GOTOOLDIR, with a mixed-installation shell fixture |
 | External text structure | Visible-projection unit/E2E tests plus scoped I/O trust metadata; printable meaning remains explicitly out of scope |

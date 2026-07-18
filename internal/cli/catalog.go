@@ -24,6 +24,12 @@ const (
 
 type commandHandler func(context.Context, *CLI, CommandSpec, operation.Intent, []string) int
 
+type catalogFaultSignature struct {
+	command   string
+	kind      fault.Kind
+	retryable bool
+}
+
 // CommandRole describes how a command participates in a deterministic task
 // flow. RoleUnknown is the zero value so missing declarations fail closed.
 type CommandRole uint8
@@ -170,34 +176,59 @@ type OutputField struct {
 	ReferenceKind string          `json:"reference_kind,omitempty"`
 }
 
-// OutputCompleteness states whether a collection is complete or deliberately
-// paged. OutputCompletenessUnknown is invalid.
-type OutputCompleteness string
+// OutputDelivery states whether one invocation returns its complete selected
+// result or one page in a public cursor protocol. It makes no claim about how
+// much of an external collection the task selected.
+type OutputDelivery string
 
 const (
-	OutputCompletenessUnknown  OutputCompleteness = ""
-	OutputCompletenessComplete OutputCompleteness = "complete"
-	OutputCompletenessPaged    OutputCompleteness = "paged"
+	OutputDeliveryUnknown  OutputDelivery = ""
+	OutputDeliveryComplete OutputDelivery = "complete"
+	OutputDeliveryPaged    OutputDelivery = "paged"
 )
 
-func (c OutputCompleteness) validate() error {
-	switch c {
-	case OutputCompletenessComplete, OutputCompletenessPaged:
+func (d OutputDelivery) validate() error {
+	switch d {
+	case OutputDeliveryComplete, OutputDeliveryPaged:
 		return nil
 	default:
-		return fmt.Errorf("output completeness is missing or invalid: %q", c)
+		return fmt.Errorf("output delivery is missing or invalid: %q", d)
+	}
+}
+
+// CollectionCoverage states what completing the delivery protocol covers
+// within the exact declared task scope and observation. It never means every
+// object or all history in the provider universe.
+type CollectionCoverage string
+
+const (
+	CollectionCoverageUnknown            CollectionCoverage = ""
+	CollectionCoverageNotApplicable      CollectionCoverage = "not_applicable"
+	CollectionCoverageExhaustive         CollectionCoverage = "exhaustive"
+	CollectionCoverageBoundedWindow      CollectionCoverage = "bounded_window"
+	CollectionCoverageDifferentialWindow CollectionCoverage = "differential_window"
+)
+
+func (c CollectionCoverage) validate() error {
+	switch c {
+	case CollectionCoverageNotApplicable, CollectionCoverageExhaustive,
+		CollectionCoverageBoundedWindow, CollectionCoverageDifferentialWindow:
+		return nil
+	default:
+		return fmt.Errorf("collection coverage is missing or invalid: %q", c)
 	}
 }
 
 // CommandOutput is the stable logical result and its supported presentations.
 // Fields describe values inside JSONEnvelope, never top-level metadata.
 type CommandOutput struct {
-	Formats           []OutputFormat     `json:"formats"`
-	DefaultFormat     OutputFormat       `json:"default_format"`
-	Fields            []OutputField      `json:"fields"`
-	Completeness      OutputCompleteness `json:"completeness"`
-	JSONEnvelope      string             `json:"json_envelope,omitempty"`
-	JSONSchemaVersion int                `json:"json_schema_version,omitempty"`
+	Formats            []OutputFormat     `json:"formats"`
+	DefaultFormat      OutputFormat       `json:"default_format"`
+	Fields             []OutputField      `json:"fields"`
+	Delivery           OutputDelivery     `json:"delivery"`
+	CollectionCoverage CollectionCoverage `json:"collection_coverage"`
+	JSONEnvelope       string             `json:"json_envelope,omitempty"`
+	JSONSchemaVersion  int                `json:"json_schema_version,omitempty"`
 }
 
 // PaginationCompletion states the one machine-readable condition that marks
@@ -352,9 +383,10 @@ func DefaultCatalog() Catalog {
 						{Name: "status", Type: OutputFieldTypeString, Description: "Diagnostic result: pass, warn, or fail."},
 						{Name: "detail", Type: OutputFieldTypeString, Description: "Diagnostic detail with unsafe structural runes rendered as visible escapes."},
 					},
-					Completeness:      OutputCompletenessComplete,
-					JSONEnvelope:      "report",
-					JSONSchemaVersion: 1,
+					Delivery:           OutputDeliveryComplete,
+					CollectionCoverage: CollectionCoverageExhaustive,
+					JSONEnvelope:       "report",
+					JSONSchemaVersion:  1,
 				},
 				Prerequisites: []string{},
 				Errors: []CommandError{
@@ -394,9 +426,10 @@ func DefaultCatalog() Catalog {
 						{Name: "effect", Type: OutputFieldTypeString, Description: "Declared read, create, or write effect."},
 						{Name: "role", Type: OutputFieldTypeString, Description: "Declared utility, discover, or act workflow role."},
 					},
-					Completeness:      OutputCompletenessComplete,
-					JSONEnvelope:      "commands",
-					JSONSchemaVersion: 4,
+					Delivery:           OutputDeliveryComplete,
+					CollectionCoverage: CollectionCoverageExhaustive,
+					JSONEnvelope:       "commands",
+					JSONSchemaVersion:  5,
 				},
 				Prerequisites: []string{},
 				Errors: []CommandError{
@@ -427,9 +460,10 @@ func DefaultCatalog() Catalog {
 						{Name: "id", Type: OutputFieldTypeString, Description: "Opaque sample reference accepted unchanged by sample read.", ReferenceKind: "sample"},
 						{Name: "name", Type: OutputFieldTypeString, Description: "Human-readable label with unsafe structural runes visibly escaped; never use it as an identifier."},
 					},
-					Completeness:      OutputCompletenessComplete,
-					JSONEnvelope:      "items",
-					JSONSchemaVersion: 1,
+					Delivery:           OutputDeliveryComplete,
+					CollectionCoverage: CollectionCoverageExhaustive,
+					JSONEnvelope:       "items",
+					JSONSchemaVersion:  1,
 				},
 				Prerequisites: []string{},
 				Errors: []CommandError{
@@ -469,9 +503,10 @@ func DefaultCatalog() Catalog {
 						{Name: "name", Type: OutputFieldTypeString, Description: "Human-readable label with unsafe structural runes rendered as visible escapes."},
 						{Name: "content", Type: OutputFieldTypeString, Description: "Complete content with unsafe structural runes rendered as visible escapes."},
 					},
-					Completeness:      OutputCompletenessComplete,
-					JSONEnvelope:      "item",
-					JSONSchemaVersion: 1,
+					Delivery:           OutputDeliveryComplete,
+					CollectionCoverage: CollectionCoverageNotApplicable,
+					JSONEnvelope:       "item",
+					JSONSchemaVersion:  1,
 				},
 				Prerequisites: []string{},
 				Errors: []CommandError{
@@ -502,7 +537,8 @@ func DefaultCatalog() Catalog {
 						{Name: "version", Type: OutputFieldTypeString, Description: "Release version embedded in the executable."},
 						{Name: "commit", Type: OutputFieldTypeString, Description: "Optional source commit embedded in the executable."},
 					},
-					Completeness: OutputCompletenessComplete,
+					Delivery:           OutputDeliveryComplete,
+					CollectionCoverage: CollectionCoverageNotApplicable,
 				},
 				Prerequisites: []string{},
 				Errors: []CommandError{
@@ -525,6 +561,14 @@ func (c Catalog) Validate() error {
 	producedKinds := make(map[string][]string)
 	consumedKinds := make(map[string][]string)
 	paginationKindOwners := make(map[string]string)
+	faultSignatures := make(map[string]catalogFaultSignature)
+	for _, declaredError := range defaultAgentErrorContract().GlobalErrors {
+		faultSignatures[declaredError.Code] = catalogFaultSignature{
+			command:   "agent-help global errors",
+			kind:      declaredError.Kind,
+			retryable: declaredError.Retryable,
+		}
+	}
 	for index, command := range c.commands {
 		if err := operation.ValidateCommandPath(command.Path); err != nil {
 			return fmt.Errorf("catalog command %d: %w", index, err)
@@ -563,6 +607,27 @@ func (c Catalog) Validate() error {
 			return fmt.Errorf("catalog contains duplicate command %q", command.Path)
 		}
 		seen[command.Path] = struct{}{}
+		for _, declaredError := range command.Agent.Errors {
+			got := catalogFaultSignature{
+				command:   command.Path,
+				kind:      declaredError.Kind,
+				retryable: declaredError.Retryable,
+			}
+			if previous, exists := faultSignatures[declaredError.Code]; exists &&
+				(previous.kind != got.kind || previous.retryable != got.retryable) {
+				return fmt.Errorf(
+					"catalog fault code %q has conflicting signatures: command %q declares kind %q retryable=%t; command %q declares kind %q retryable=%t",
+					declaredError.Code,
+					previous.command,
+					previous.kind,
+					previous.retryable,
+					got.command,
+					got.kind,
+					got.retryable,
+				)
+			}
+			faultSignatures[declaredError.Code] = got
+		}
 		for _, produced := range command.ProducedRefs() {
 			producedKinds[produced.Kind] = append(producedKinds[produced.Kind], command.Path)
 		}
@@ -784,8 +849,14 @@ func validateAgentContract(command CommandSpec) error {
 			}
 		}
 	}
-	if err := contract.Output.Completeness.validate(); err != nil {
+	if err := contract.Output.Delivery.validate(); err != nil {
 		return err
+	}
+	if err := contract.Output.CollectionCoverage.validate(); err != nil {
+		return err
+	}
+	if _, none := seenFormats[OutputFormatNone]; none && contract.Output.CollectionCoverage != CollectionCoverageNotApplicable {
+		return fmt.Errorf("none output format requires collection coverage %q", CollectionCoverageNotApplicable)
 	}
 	_, supportsJSON := seenFormats[OutputFormatJSON]
 	if supportsJSON {
@@ -1015,18 +1086,21 @@ func validateMutationBinding(name string, targetInputs []string, inputs map[stri
 }
 
 func validatePaginationContract(output CommandOutput, pagination *PaginationContract, inputs map[string]CommandInput) error {
-	switch output.Completeness {
-	case OutputCompletenessComplete:
+	switch output.Delivery {
+	case OutputDeliveryComplete:
 		if pagination != nil {
 			return fmt.Errorf("complete output must not declare a pagination binding")
 		}
 		return nil
-	case OutputCompletenessPaged:
+	case OutputDeliveryPaged:
 		if pagination == nil {
 			return fmt.Errorf("paged output must declare a pagination binding")
 		}
+		if output.CollectionCoverage == CollectionCoverageNotApplicable {
+			return fmt.Errorf("paged output requires collection coverage")
+		}
 	default:
-		return nil // Completeness validation reports the governing error.
+		return nil // Delivery validation reports the governing error.
 	}
 	if len(output.Formats) != 1 || output.Formats[0] != OutputFormatJSON || output.DefaultFormat != OutputFormatJSON {
 		return fmt.Errorf("paged output must support only JSON and use JSON as its default format")
@@ -1229,9 +1303,6 @@ func argumentSyntaxAllowedValues(value string) ([]string, error) {
 		return []string{}, nil
 	}
 	values := strings.Split(value, "|")
-	if len(values) < 2 {
-		return nil, fmt.Errorf("argument syntax value %q is outside the supported grammar", value)
-	}
 	for _, candidate := range values {
 		if err := validateContractText("argument syntax value", candidate); err != nil || strings.ContainsAny(candidate, "[]()<>|=") {
 			return nil, fmt.Errorf("argument syntax value %q is invalid", candidate)

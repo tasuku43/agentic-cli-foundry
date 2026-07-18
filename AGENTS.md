@@ -55,7 +55,7 @@ A thesis change is not complete when only `docs/00_theses.md` changed. Its conse
 
 ## Non-negotiable invariants
 
-1. **The public CLI expresses user tasks.** Do not expose a vendor method, arbitrary route, or raw transport escape hatch as a shortcut.
+1. **The public CLI expresses and closes user tasks.** Do not expose a vendor method, arbitrary route, or raw transport escape hatch as a shortcut. A supported outcome owns the deterministic selection, joining, and interpretation needed for routine success without an undeclared parser, provider-notation decoder, source inspection, or exploratory call; a deliberately raw utility must state its narrower promise.
 2. **Discovery and action stay separate.** A `RoleDiscover` command may return candidates and opaque references. A `RoleAct` uses exactly one target-binding mode: it either requires a unique opaque reference and accepts it unchanged, or declares one complete command-bound `tool_local` fixed target when the command path alone identifies a CLI-owned singleton. Fixed-target acts produce and consume no references. An action does not rediscover, normalize, decode, or reconstruct an identifier. Required-reference chains must lead back to an invocable producer rather than a closed cycle.
 3. **The four-layer dependency direction holds.** Domain has no outward dependency. Application depends on domain. Infrastructure depends on domain contracts. CLI is the composition root.
 4. **Every externally visible operation declares an effect.** Use `operation.EffectRead`, `operation.EffectCreate`, or `operation.EffectWrite`; unknown effects fail closed.
@@ -67,6 +67,7 @@ A thesis change is not complete when only `docs/00_theses.md` changed. Its conse
 10. **One gate decides completion.** Finish implementation work only when `task check` passes. Publication work also requires `task public:check`; release work requires `task release:check`.
 11. **External calls are bounded and secret-free above infrastructure.** Propagate one context, declare pagination/call policy, and keep OAuth tokens, PATs, and credential-bearing types inside infrastructure.
 12. **External text remains untrusted data.** Visible projection protects terminal and TSV/JSON structure by distinguishing backslashes, controls/formats, and Unicode line separators; it does not filter printable prompt-like meaning. Opaque references bypass display projection and retain their exact validated value.
+13. **Semantics precede presentation.** Before rendering, validate the declared task identity and every request dimension that the task actually carries: target, parent, and/or scope. A scoped collection's task-owned result retains its declared scope even when empty. Preserve absent versus explicit empty/zero/false and bounded uncertainty whenever those distinctions affect interpretation, and validate returned opaque values against the reference kind required by their semantic field. Each interpretation-sensitive capability supplies task-owned conformance and negative-inference tests; presentation does not invent identity, relationships, completeness, or confidence from labels, order, proximity, quoting, or indentation.
 
 ## Layer responsibilities
 
@@ -120,13 +121,23 @@ Observe runtime-only behavior before changing it. Add bounded diagnostics, repro
 1. Define the user outcome and test it against the current theses. Revise a weak thesis before adding a code-level exception.
 2. Classify the command with `RoleUtility`, `RoleDiscover`, or `RoleAct`; for an act, choose exactly one reference-bound or command-bound `tool_local` fixed target, and declare any reference kinds on structured inputs and output fields so produced/consumed edges are derived.
 3. Prefer extending an existing task when the outcome is the same.
-4. Add or refine domain vocabulary and its invariants.
+4. Add or refine domain vocabulary and its invariants, including declared task
+   identity and every target, parent, or scope dimension the task carries;
+   contextual kind validation where semantic reference fields exist; and
+   explicit absent/empty/zero/false or uncertain states where they affect
+   interpretation.
 5. Add an application use case with task-specific input, output, and ports.
 6. Implement a concrete infrastructure adapter behind those ports.
-7. Register one complete `cli.CommandSpec` in `cli.Catalog` and derive routing, scoped help, capability, role, reference flow, output, prerequisites, and recovery metadata from it. Keep the root agent index limited to path, namespace, summary, outcome, capability, effect, and role; verify detailed metadata only in scoped help. A `complete` output has no public pagination binding; a `paged` output is JSON-only and binds one optional opaque cursor argument or flag to one same-kind, always-present top-level string cursor beside the JSON envelope, with typed `empty_cursor` completion.
+7. Register one complete `cli.CommandSpec` in `cli.Catalog` and derive routing, scoped help, capability, role, reference flow, output, prerequisites, and recovery metadata from it. Keep the root agent index limited to path, namespace, summary, outcome, capability, effect, and role; verify detailed metadata only in scoped help. Declare delivery (`complete` or `paged`) separately from collection coverage (`not_applicable`, `exhaustive`, `bounded_window`, or `differential_window`); complete delivery does not imply exhaustive provider history. Complete delivery has no public pagination binding. Paged delivery is JSON-only, cannot use `not_applicable`, and binds one optional opaque cursor argument or flag to one same-kind, always-present top-level string cursor beside the JSON envelope, with typed `empty_cursor` completion.
 8. Declare `Effect`, `Intent`, `TargetRef`, and `Impact`. Bind create scope through `MutationContract.parent_input`; bind a write's existing target through `target_id_input` and any distinct scope through optional `parent_input`. Make missing, unbound, mismatched, or inconsistent values fail before the side effect.
 9. For an external API, bind the secret-free authentication requirement, declare every standard `app/authn.Gate` fault plus any provider-specific fault in the catalog, issue `BindingID` only inside infrastructure, pass the validated session's non-serialized binding unchanged through each authenticated task port, resolve and revalidate that exact infrastructure authentication record immediately before I/O, and declare pagination/call policy, provider fault mapping, and publishable schema fixtures before enabling live I/O. Never pass credential-bearing clients or provider types into application code.
-10. Add unit, contract, opaque-reference round-trip, negative-path, hostile-output, recovery, and public-boundary tests in proportion to risk.
+10. Add unit, contract, opaque-reference round-trip, negative-path,
+    hostile-output, recovery, and public-boundary tests in proportion to risk.
+    For interpretation-sensitive results, include a presentation-independent
+    typed fixture, answer key, every applicable request dimension, an empty-
+    scope case when the task returns a scoped collection, and applicable
+    negative-inference canaries; record a reviewed routine-success external-
+    processing count of zero for supported outcomes.
 11. Propagate any thesis change through product, architecture, security, Skill, and harness documents.
 12. Run `task check` and replay the relevant agent-readiness scenario.
 
