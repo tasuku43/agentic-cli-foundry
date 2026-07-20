@@ -9,7 +9,7 @@ The harness is the executable counterpart of the theses, product contract, archi
 | Profile | Task alias | Intended use | Includes |
 |---|---|---|---|
 | `fast` | `task check:fast` | Short local feedback loop | Formatting, architecture checks, capability/schema contracts, focused unit and contract tests |
-| `full` | `task check` | Required pre-merge gate | Fast profile plus vet, race, tidy/diff checks, then the complete `security`, `release`, and `public` profiles |
+| `full` | `task check` | Required implementation gate | Fast profile plus vet, race, tidy/diff checks |
 | `security` | `task security` | Security and dependency changes | Repository guard, module integrity, pinned static and vulnerability analysis |
 | `release` | `task release:check` | Packaging and release changes | Artifact, metadata, checksum, Formula, and workflow contracts |
 | `public` | `task public:check` | Bootstrap completion and public publication | Ready-profile identity, forbidden-data, required-file, license, capability/schema contracts, and public-boundary checks |
@@ -26,11 +26,15 @@ Direct invocation is supported for automation:
 
 Every profile starts with a local-toolchain preflight after the gate sanitizes its Go environment. The preflight requires the exact Go version declared by `go.mod` under `GOTOOLCHAIN=local` and verifies the selected binary, its reported version, `GOVERSION`, `GOROOT`, `GOTOOLDIR`, and the compiler in that tool directory as one installation. A mismatch fails once with those values and remediation guidance before formatting, tests, downloads, or release builds begin.
 
-All profiles require Git, Go, and `gofmt`. Because `full` includes `security`, `release`, and `public`, a local `task check` also requires ShellCheck 0.9.0 or newer, Ruby, `tar`, `unzip`, and either `sha256sum` or `shasum`. Pinned Go security and action-lint tools must already exist in the module cache or be downloadable over the network. The `full`/`release` preflight reports missing system tools together before the long gate begins; network availability is documented rather than actively probed because a network probe would be nondeterministic and provider-specific.
+All profiles require Git, Go, and `gofmt`. The `release` profile additionally requires ShellCheck 0.9.0 or newer, Ruby, `tar`, `unzip`, and either `sha256sum` or `shasum`. Pinned Go security and action-lint tools must already exist in the module cache or be downloadable over the network. The release preflight reports missing system tools together before the long gate begins; network availability is documented rather than actively probed because a network probe would be nondeterministic and provider-specific.
 
 The canonical gate and release packager force module mode and neutralize ambient Go workspace, toolchain, experiment, FIPS, and flag settings before invoking Go. This prevents a local or CI `GOFLAGS` value from silently selecting no tests and keeps agent, developer, and workflow evidence on the same checked command set. A release fixture launches the public profile with hostile values and proves that its first Go-backed check observes only the sanitized contract.
 
-CI is the completion authority. A local hook may run `fast` to reduce latency, but it must call this script and must not claim equivalence to `full`. The Codex `Stop` hook resolves its script from the Git root so it also works from a subdirectory; after the user completes [Codex's project-hook trust review](https://learn.chatgpt.com/docs/hooks), a failed fast gate returns a structured `continue: false` result that tells the agent to repair and rerun the canonical command.
+CI is the completion authority. Pull-request CI runs `full` and the
+security/public boundary profiles in parallel. The repository installs no
+automatic Codex Stop hook: a per-turn gate adds latency and does not prove
+completion. Optional local automation must delegate to one named profile and
+must not claim equivalence to a profile it did not run.
 
 ## Harness components
 

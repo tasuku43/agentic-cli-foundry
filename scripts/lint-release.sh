@@ -39,7 +39,11 @@ if ! awk -v current="$shellcheck_version" -v floor=0.9.0 'BEGIN {
   echo "release gate requires ShellCheck >= 0.9.0; running $shellcheck_version" >&2
   exit 1
 fi
-git ls-files -co --exclude-standard -z -- '*.sh' | xargs -0 shellcheck
+git ls-files -co --exclude-standard -z -- '*.sh' |
+  while IFS= read -r -d '' script; do
+    [[ -f $script ]] && printf '%s\0' "$script"
+  done |
+  xargs -0 shellcheck
 go test ./tools/archivepack ./tools/internal/releaseversion ./tools/releaseversion
 required_go=go$(awk '$1 == "go" { print $2 }' go.mod)
 actual_go=$(go env GOVERSION)
@@ -113,7 +117,8 @@ for forbidden in 'HOMEBREW_GITHUB_API_TOKEN' 'api.github.com/repos/' 'Authorizat
 done
 
 for required in \
-  './scripts/check.sh full' './scripts/package-release.sh' 'checksums.txt' \
+  './scripts/check.sh full' './scripts/check.sh security' './scripts/check.sh release' \
+  './scripts/check.sh public' './scripts/package-release.sh' 'checksums.txt' \
   'gh release create' 'Formula/' 'scripts/render-formula.sh'; do
   grep -qF "$required" .github/workflows/release.yml || {
     echo "release workflow is missing: $required" >&2
@@ -219,7 +224,6 @@ trap cleanup EXIT
 release_input_roots=(
   go.mod
   .harness/project.json
-  .codex
   .github/workflows/release.yml
   Formula
   Taskfile.yml

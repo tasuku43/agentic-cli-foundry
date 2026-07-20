@@ -4,17 +4,19 @@ This file is the only canonical operating policy for Codex and contributors in t
 
 ## Read before changing anything
 
-Read these documents in order:
+Always read [Project theses](docs/00_theses.md). Then read only the governing
+documents selected by the change:
 
-1. [Project theses](docs/00_theses.md)
-2. [Product contract](docs/01_product_contract.md)
-3. [Architecture](docs/02_architecture.md)
-4. [Security model](docs/03_security_model.md)
-5. [Harness](docs/04_harness.md)
+- Public outcome, command, help, output, or compatibility: [Product contract](docs/01_product_contract.md)
+- Layer, dependency, catalog, or execution structure: [Architecture](docs/02_architecture.md)
+- Authentication, external I/O, mutation, secrets, or untrusted data: [Security model](docs/03_security_model.md)
+- Test policy, repository tooling, CI, or gates: [Harness](docs/04_harness.md)
+- Publication or release: [Public Repository](docs/05_public_repository.md) and [Release](docs/06_release.md)
+- External API capability: [Authentication](docs/07_authentication.md), [External API Contracts](docs/08_external_api_contracts.md), and [Agent Readiness Validation](docs/09_agent_readiness_validation.md)
 
-For an external API capability, also read [Authentication](docs/07_authentication.md), [External API Contracts](docs/08_external_api_contracts.md), and [Agent Readiness Validation](docs/09_agent_readiness_validation.md).
-
-For release or publication work, also read [Public Repository](docs/05_public_repository.md) and [Release](docs/06_release.md).
+Read documents in numeric order when several apply. If the scope is unclear,
+the change revises a thesis, or it crosses product, architecture, security, and
+harness boundaries, read `00` through `04` before acting.
 
 ## Bootstrap before capability work
 
@@ -105,6 +107,13 @@ For a non-trivial change, create a directory under `docs/work/<change-name>/` st
 
 Durable conclusions belong in theses, architecture, security, or an ADR. Do not leave lasting policy only in an implementation plan.
 
+Work packets are active-change artifacts, not a second permanent knowledge
+base. Use `Retention: temporary` by default and remove a completed packet from
+the final tree after promoting its conclusions. `Retention: evidence` is a
+narrow exception for raw experiments, incident/release observations, or other
+facts that Git history and durable contracts cannot usefully replace; its goal
+must name the reason, governing contract, and review/delete trigger.
+
 When the same design choice, workaround, or point of confusion appears twice, treat it as thesis evidence. Record it before adding another local special case.
 
 Use this writing discipline:
@@ -151,7 +160,7 @@ task release:check
 task public:check
 ```
 
-The underlying interface is `./scripts/check.sh fast|full|security|release|public`. Codex hooks call that interface and do not reimplement the checks.
+The underlying interface is `./scripts/check.sh fast|full|security|release|public`. Optional local automation must call that interface and must not claim equivalence to a profile it did not run.
 
 Do not weaken a check merely to make a change pass. If a check encodes the wrong policy, update the governing document and test the new policy as part of the same reviewed change.
 

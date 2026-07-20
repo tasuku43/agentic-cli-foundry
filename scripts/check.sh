@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # This is the only implementation of repository quality gates. Task, agent
-# hooks, CI, and release workflows call a named profile here.
+# Task, optional local automation, CI, and release workflows call a named profile here.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export GO111MODULE=on
@@ -23,7 +23,7 @@ preflight_commands() {
   local -a required_commands=(go gofmt git)
   local -a missing_commands=()
   local command_name
-  if [[ $selected_profile == full || $selected_profile == release ]]; then
+  if [[ $selected_profile == release ]]; then
     required_commands+=(shellcheck tar unzip ruby)
   fi
   for command_name in "${required_commands[@]}"; do
@@ -31,7 +31,7 @@ preflight_commands() {
       missing_commands+=("$command_name")
     fi
   done
-  if [[ $selected_profile == full || $selected_profile == release ]]; then
+  if [[ $selected_profile == release ]]; then
     if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
       missing_commands+=("sha256sum-or-shasum")
     fi
@@ -157,9 +157,6 @@ run_full() {
   go test -race ./...
   go mod tidy -diff
   git diff --check
-  run_security
-  run_release
-  run_public
 }
 
 case "$profile" in

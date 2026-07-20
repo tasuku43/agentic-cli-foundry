@@ -249,7 +249,7 @@ Documentation explains a claim, but a repeatable check preserves it across contr
 ### Mechanical enforcement
 
 - `./scripts/check.sh` owns the `fast`, `full`, `security`, `release`, and `public` profiles.
-- Task aliases, local hooks, and CI delegate to that script.
+- Task aliases, optional local automation, and CI delegate to that script.
 - Tool versions and third-party actions are pinned according to repository policy.
 - `task check` is the pre-merge gate; higher-risk operations add their named profile.
 
@@ -294,7 +294,7 @@ The project should not depend on one maintainer remembering parallel registries,
 
 - `AGENTS.md` is the only agent-policy source of truth.
 - `cli.Catalog` is canonical; help and dispatch do not maintain separate lists.
-- `scripts/check.sh` is canonical; Task, hooks, and CI do not duplicate commands.
+- `scripts/check.sh` is canonical; Task, optional local automation, and CI do not duplicate commands.
 - Durable decisions live in theses, numbered docs, or ADRs; active implementation state lives in work packets.
 - Dependencies are added only when their safety and maintenance value exceeds their ongoing cost.
 

@@ -21,7 +21,6 @@ Additional directories serve different lifetimes:
 
 - The [decision template](decisions/0000-template.md) starts durable architecture decision records. An ADR is never edited to hide an old decision; a later ADR supersedes it.
 - The [work-packet goal template](work/_template/goal.md) starts bounded work packets. Facts and plans there are temporary unless promoted into a durable document.
-- The [repository design](plans/2026-07-18-agentic-cli-foundry-design.md) illustrates the implementation designs stored under `plans/`.
 
 Root community documents have stable conventional locations:
 

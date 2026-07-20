@@ -38,8 +38,12 @@ jobs:
           revision=$(git rev-list -n 1 "${GITHUB_REF_NAME}")
           echo "revision=${revision}" >>"${GITHUB_OUTPUT}"
 
-      - name: Run the canonical full gate
-        run: ./scripts/check.sh full
+      - name: Run all required release preflight gates
+        run: |
+          ./scripts/check.sh full
+          ./scripts/check.sh security
+          ./scripts/check.sh release
+          ./scripts/check.sh public
 
   build:
     name: Build ${{ matrix.goos }} ${{ matrix.goarch }}

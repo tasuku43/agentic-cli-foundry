@@ -61,7 +61,7 @@ Archives contain the intended binary and only explicitly reviewed supporting fil
 
 The packaging command is create-only. It stages and inspects an archive in a temporary directory on the output filesystem, then publishes it with an atomic no-overwrite hard link. It refuses to overwrite an archive that already exists or appears during the build.
 
-Archive creation uses the Go standard library rather than host-specific `tar`, `gzip`, or `zip` creation flags. Every archive contains one regular executable with mode `0755`, a fixed UTC modification time, empty user and group names, and numeric user and group IDs of zero. Gzip and ZIP headers use the same canonical time and contain no build-host identity. The packaging boundary forces module mode; fixes `GOAMD64` or `GOARM64` at the portable baseline; sets `GOFIPS140=off`; ignores ambient Go workspace, toolchain, experiment, and flag configuration; and disables implicit Go VCS stamping because the reviewed full revision is already embedded explicitly. Repository release inputs—including production and tool source, packaging and Formula policy, workflow configuration, project metadata, and the Codex harness—must be regular files and are content-fingerprinted through the final release check; dependency modules are verified around each archive pass; and local filesystem module replacements are rejected because their source would sit outside the public release input boundary. The exact Go version in `go.mod`, `-trimpath`, the source bytes, tag, revision, target, and verified module graph are part of the reproducibility input. This contract does not promise equal bytes across different Go versions or establish who performed a build.
+Archive creation uses the Go standard library rather than host-specific `tar`, `gzip`, or `zip` creation flags. Every archive contains one regular executable with mode `0755`, a fixed UTC modification time, empty user and group names, and numeric user and group IDs of zero. Gzip and ZIP headers use the same canonical time and contain no build-host identity. The packaging boundary forces module mode; fixes `GOAMD64` or `GOARM64` at the portable baseline; sets `GOFIPS140=off`; ignores ambient Go workspace, toolchain, experiment, and flag configuration; and disables implicit Go VCS stamping because the reviewed full revision is already embedded explicitly. Repository release inputs—including production and tool source, packaging and Formula policy, workflow configuration, project metadata—must be regular files and are content-fingerprinted through the final release check; dependency modules are verified around each archive pass; and local filesystem module replacements are rejected because their source would sit outside the public release input boundary. The exact Go version in `go.mod`, `-trimpath`, the source bytes, tag, revision, target, and verified module graph are part of the reproducibility input. This contract does not promise equal bytes across different Go versions or establish who performed a build.
 
 ## Executable release profile
 
@@ -77,9 +77,9 @@ Archive creation uses the Go standard library rather than host-specific `tar`, `
 8. runs `ruby -c` against the rendered Formula; and
 9. exercises the isolated-tap ownership test for Formula audit cleanup.
 
-The profile requires `tar`, `unzip`, either `sha256sum` or `shasum`, ShellCheck `0.9.0` or newer, and Ruby. The canonical `full` and `release` profiles preflight these system commands before tests or matrix builds; the release lint still validates ShellCheck's compatibility floor. Archive creation itself has no host `zip` dependency. ShellCheck covers every publishable `.sh` file rather than a hand-maintained subset. It is a system prerequisite with an explicit compatibility floor, not an exact repository pin: the floor accepts the `0.9.0` analyzer supplied by the documented Linux runner and newer compatible analyzers such as `0.11.x`. A missing or older ShellCheck, or a missing Ruby executable, is a failed release check rather than a skipped check. A developer without these tools must use the documented CI release gate and treat its result as required evidence before tagging.
+The profile requires `tar`, `unzip`, either `sha256sum` or `shasum`, ShellCheck `0.9.0` or newer, and Ruby. The canonical `release` profile preflights these system commands before tests or matrix builds; the release lint still validates ShellCheck's compatibility floor. Archive creation itself has no host `zip` dependency. ShellCheck covers every publishable `.sh` file rather than a hand-maintained subset. It is a system prerequisite with an explicit compatibility floor, not an exact repository pin: the floor accepts the `0.9.0` analyzer supplied by the documented Linux runner and newer compatible analyzers such as `0.11.x`. A missing or older ShellCheck, or a missing Ruby executable, is a failed release check rather than a skipped check. A developer without these tools must use the documented CI release gate and treat its result as required evidence before tagging.
 
-The workflow runs this canonical release profile once inside the Ubuntu preflight's full gate. The later macOS Formula job is deliberately narrower: it renders the checksum-pinned Formula, runs `ruby -c`, and performs the real Homebrew strict audit. It does not repeat `check.sh release`, because that would rebuild the complete five-target verification matrix on a different host and would incorrectly make Formula publication depend on Linux preflight tools such as ShellCheck being installed on the macOS runner. The Formula job consumes only artifacts produced after the preflight and build jobs succeed.
+The workflow runs `full`, `security`, `release`, and `public` explicitly in the Ubuntu preflight. The later macOS Formula job is deliberately narrower: it renders the checksum-pinned Formula, runs `ruby -c`, and performs the real Homebrew strict audit. It does not repeat `check.sh release`, because that would rebuild the complete five-target verification matrix on a different host and would incorrectly make Formula publication depend on Linux preflight tools such as ShellCheck being installed on the macOS runner. The Formula job consumes only artifacts produced after the preflight and build jobs succeed.
 
 ## Release workflow
 
@@ -119,7 +119,7 @@ Prereleases do not update stable Formula metadata.
 
 ## Release preparation
 
-Create a work packet for a release and record:
+Create a temporary work packet for a release and record:
 
 - target version and rationale;
 - included changes and compatibility impact;
@@ -129,6 +129,13 @@ Create a work packet for a release and record:
 - clean-environment installation evidence;
 - artifact and checksum verification;
 - public-boundary review.
+
+After rollout, promote stable procedure and policy into this document or an ADR.
+Delete the ordinary packet from the final tree. Retain it as
+`Retention: evidence` only when it contains unique manual rollout, incident, or
+external-system observations that cannot be reconstructed from the immutable
+Release, workflow run, tests, and commit; state its governing contract and
+review/delete trigger in `goal.md`.
 
 Before tagging, run:
 

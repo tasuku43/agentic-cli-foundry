@@ -109,18 +109,18 @@ All entry points delegate to `./scripts/check.sh`:
 | Command | Purpose |
 |---|---|
 | `task check:fast` | Formatting, architecture, and focused tests for short feedback loops |
-| `task check` | The full pre-merge gate: fast, vet/race/tidy/diff, security, release, and public profiles |
+| `task check` | The implementation gate: fast, vet/race, tidy, and diff checks |
 | `task security` | Credential, dependency, egress, and public-boundary checks |
 | `task release:check` | Packaging and release-contract checks |
 | `task public:check` | Public-readiness and template-sanitization checks |
 
-CI is the authority. Local hooks may run a faster profile, but they must call the same script rather than reimplementing policy.
+CI is the authority. Pull-request CI runs the implementation and security/public boundary gates in parallel. Optional local automation must call the same script rather than reimplementing policy.
 
 ### Local gate prerequisites
 
 Install the exact Go version declared by `go.mod`, Git, `gofmt`, and [Task](https://taskfile.dev/). The gate deliberately sets `GOTOOLCHAIN=local`; select the exact installation in PATH instead of relying on automatic toolchain download. It validates the Go binary, reported version, `GOROOT`, `GOTOOLDIR`, and compiler before doing long work and prints one remediation block when installations are mixed.
 
-`task check` includes the complete security, release, and public profiles. It therefore also needs ShellCheck 0.9.0 or newer, Ruby, `tar`, `unzip`, either `sha256sum` or `shasum`, and network access or a pre-populated Go module cache for the pinned security/action-lint tools. The gate reports missing system tools at startup; it never skips a subprofile because a prerequisite is absent.
+`task release:check` additionally needs ShellCheck 0.9.0 or newer, Ruby, `tar`, `unzip`, either `sha256sum` or `shasum`, and network access or a pre-populated Go module cache for the pinned action-lint tool. Specialized profiles remain explicit completion evidence for the boundaries they govern.
 
 ## Public template policy
 

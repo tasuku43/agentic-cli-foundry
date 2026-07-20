@@ -30,7 +30,7 @@ tasks:
       - ./scripts/check.sh fast
 
   check:
-    desc: Run every local quality, security, release, and public-readiness gate.
+    desc: Run the required implementation-quality gate.
     cmds:
       - ./scripts/check.sh full
 
