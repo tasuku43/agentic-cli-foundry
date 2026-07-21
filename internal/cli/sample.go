@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/tasuku43/agentic-cli-foundry/internal/domain/fault"
 	"github.com/tasuku43/agentic-cli-foundry/internal/domain/operation"
@@ -19,8 +18,8 @@ const (
 	maxSampleListBytes    = 4 * 1024 * 1024
 )
 
-func runSampleList(ctx context.Context, c *CLI, command CommandSpec, intent operation.Intent, args []string) int {
-	format, err := parseFormatOnlyArgs(args)
+func runSampleList(ctx context.Context, c *CLI, command CommandSpec, intent operation.Intent, inputs ParsedInputs) int {
+	format, err := parseSuccessFormat(inputs.One("--format"))
 	if err != nil {
 		return c.failUsage(ctx, "invalid_arguments", err.Error()+"; usage: "+command.Usage(), "help sample list", "Correct the command arguments.")
 	}
@@ -35,11 +34,12 @@ func runSampleList(ctx context.Context, c *CLI, command CommandSpec, intent oper
 	if err != nil {
 		return c.fail(ctx, err)
 	}
-	return c.emit(ctx, output)
+	return c.emitResult(ctx, output)
 }
 
-func runSampleRead(ctx context.Context, c *CLI, command CommandSpec, intent operation.Intent, args []string) int {
-	id, format, err := parseSampleReadArgs(args)
+func runSampleRead(ctx context.Context, c *CLI, command CommandSpec, intent operation.Intent, inputs ParsedInputs) int {
+	id := inputs.One("--id")
+	format, err := parseSuccessFormat(inputs.One("--format"))
 	if err != nil {
 		return c.failUsage(ctx, "invalid_arguments", err.Error()+"; usage: "+command.Usage(), "help sample read", "Correct the command arguments.")
 	}
@@ -58,67 +58,7 @@ func runSampleRead(ctx context.Context, c *CLI, command CommandSpec, intent oper
 	if err != nil {
 		return c.fail(ctx, err)
 	}
-	return c.emit(ctx, output)
-}
-
-func parseSampleReadArgs(args []string) (string, successFormat, error) {
-	format := successFormatTSV
-	var id string
-	seenID := false
-	seenFormat := false
-	for index := 0; index < len(args); index++ {
-		argument := args[index]
-		switch {
-		case argument == "--id":
-			if seenID {
-				return "", format, fmt.Errorf("--id may be specified only once")
-			}
-			seenID = true
-			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
-				return "", format, fmt.Errorf("--id requires a value")
-			}
-			index++
-			id = args[index]
-		case strings.HasPrefix(argument, "--id="):
-			if seenID {
-				return "", format, fmt.Errorf("--id may be specified only once")
-			}
-			seenID = true
-			id = strings.TrimPrefix(argument, "--id=")
-		case argument == "--format":
-			if seenFormat {
-				return "", format, fmt.Errorf("--format may be specified only once")
-			}
-			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
-				return "", format, fmt.Errorf("--format requires tsv or json")
-			}
-			index++
-			parsed, err := parseSuccessFormat(args[index])
-			if err != nil {
-				return "", format, err
-			}
-			format = parsed
-			seenFormat = true
-		case strings.HasPrefix(argument, "--format="):
-			if seenFormat {
-				return "", format, fmt.Errorf("--format may be specified only once")
-			}
-			parsed, err := parseSuccessFormat(strings.TrimPrefix(argument, "--format="))
-			if err != nil {
-				return "", format, err
-			}
-			format = parsed
-			seenFormat = true
-		case strings.HasPrefix(argument, "-"):
-			return "", format, fmt.Errorf("unknown flag %q", argument)
-		default:
-			return "", format, fmt.Errorf("sample read accepts an ID only through --id")
-		}
-	}
-	if !seenID || id == "" {
-		return "", format, fmt.Errorf("--id is required")
-	}
-	return id, format, nil
+	return c.emitResult(ctx, output)
 }
 
 func validateSampleSummaries(items []sample.Summary) error {

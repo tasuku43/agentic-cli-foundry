@@ -160,7 +160,21 @@ The binding is process-local correlation metadata. Do not persist it, cache it a
 
 The application resolver gives a present environment source precedence over persistent configuration. A present but invalid environment value fails closed; it does not reveal or fall back to the persistent value. Missing environment configuration permits the persistent source. Corrupt, unsafe, or unknown-schema persistent configuration is an error, not absence. Once a method is selected, authentication invokes only that method; failure never triggers probing or fallback to another credential family.
 
-The provider-neutral file store accepts an injected path and creates no default state. It strictly decodes one bounded JSON value, rejects unknown fields and schema versions, validates bounded unique public parameters, requires an owner-only regular file, rejects symbolic links and non-regular targets, and replaces through a same-directory owner-only temporary file plus atomic rename. Its read-only status reports missing, valid, or invalid state and never repairs a partial or corrupt result. Credentials require a separate project-selected store and threat model.
+The provider-neutral file store accepts an injected absolute path and creates no
+default state or parent directory. It strictly decodes one bounded JSON value,
+rejects unknown fields and schema versions, validates bounded unique public
+parameters, and on Unix requires owner-only directory and regular-file modes.
+It rejects symbolic links and non-regular targets, opens and verifies the
+parent as a confined filesystem root, stages an owner-only same-directory file,
+and revalidates the requested directory identity, staged-file identity and
+size, and target shape immediately before replacement. Unix then syncs the
+opened directory after rename. Windows still enforces regular shape and
+confined replacement, but portable mode bits do not prove ACL ownership and
+the standard API makes no atomicity or directory-durability guarantee. Once
+replacement begins, an error therefore does not promise which version is
+active. Read-only status reports missing, valid, or invalid state and never
+repairs a partial or corrupt result. Credentials require a separate
+project-selected store and threat model.
 
 ## OAuth decision
 

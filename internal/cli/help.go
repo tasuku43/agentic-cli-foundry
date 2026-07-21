@@ -16,7 +16,7 @@ type helpFormat uint8
 const (
 	helpFormatText helpFormat = iota
 	helpFormatAgent
-	agentHelpSchemaVersion = 5
+	agentHelpSchemaVersion = 6
 )
 
 type agentIndexDocument struct {
@@ -45,20 +45,29 @@ type agentIndexCommand struct {
 }
 
 type agentDocument struct {
-	SchemaVersion int                `json:"schema_version"`
-	View          string             `json:"view"`
-	Program       string             `json:"program"`
-	Scope         agentScope         `json:"scope"`
-	GlobalInputs  []CommandInput     `json:"global_inputs"`
-	IOContract    agentIOContract    `json:"io_contract"`
-	ErrorContract agentErrorContract `json:"error_contract"`
-	Commands      []agentCommand     `json:"commands"`
-	Workflows     []agentWorkflow    `json:"workflows"`
+	SchemaVersion     int                    `json:"schema_version"`
+	View              string                 `json:"view"`
+	Program           string                 `json:"program"`
+	Scope             agentScope             `json:"scope"`
+	InvocationGrammar agentInvocationGrammar `json:"invocation_grammar"`
+	GlobalInputs      []CommandInput         `json:"global_inputs"`
+	IOContract        agentIOContract        `json:"io_contract"`
+	ErrorContract     agentErrorContract     `json:"error_contract"`
+	Commands          []agentCommand         `json:"commands"`
+	Workflows         []agentWorkflow        `json:"workflows"`
 }
 
 type agentScope struct {
 	Selector string `json:"selector"`
 	Kind     string `json:"kind"`
+}
+
+type agentInvocationGrammar struct {
+	ValueFlagForms              []string `json:"value_flag_forms"`
+	DashPrefixedFlagValueForm   string   `json:"dash_prefixed_flag_value_form"`
+	BooleanFlagForms            []string `json:"boolean_flag_forms"`
+	PositionalOnlyMarker        string   `json:"positional_only_marker"`
+	DashPrefixedPositionalUsage string   `json:"dash_prefixed_positional_usage"`
 }
 
 type agentIOContract struct {
@@ -125,11 +134,12 @@ type agentWorkflowConsumer struct {
 	Input string `json:"input"`
 }
 
-func runHelp(ctx context.Context, c *CLI, _ CommandSpec, _ operation.Intent, args []string) int {
-	format, selector, err := parseHelpArgs(args)
+func runHelp(ctx context.Context, c *CLI, _ CommandSpec, _ operation.Intent, inputs ParsedInputs) int {
+	format, err := parseHelpFormat(inputs.One("--format"))
 	if err != nil {
 		return c.failUsage(ctx, "invalid_arguments", err.Error(), "help", "Use a supported format and canonical selector.")
 	}
+	selector := strings.Join(inputs.Values("command"), " ")
 
 	commands := c.catalog.Commands()
 	exact := false
@@ -150,55 +160,15 @@ func runHelp(ctx context.Context, c *CLI, _ CommandSpec, _ operation.Intent, arg
 		if err != nil {
 			return c.fail(ctx, err)
 		}
-		return c.emit(ctx, output)
+		return c.emitResult(ctx, output)
 	}
 	if selector == "" {
-		return c.emit(ctx, c.renderRootHelp())
+		return c.emitResult(ctx, c.renderRootHelp())
 	}
 	if exact {
-		return c.emit(ctx, renderCommandHelp(commands[0]))
+		return c.emitResult(ctx, renderCommandHelp(commands[0]))
 	}
-	return c.emit(ctx, renderCommandIndex("Commands in namespace "+selector+":", commands))
-}
-
-func parseHelpArgs(args []string) (helpFormat, string, error) {
-	format := helpFormatText
-	selectorWords := make([]string, 0, len(args))
-	seenFormat := false
-	for index := 0; index < len(args); index++ {
-		arg := args[index]
-		switch {
-		case arg == "--format":
-			if seenFormat {
-				return format, "", fmt.Errorf("--format may be specified only once")
-			}
-			if index+1 >= len(args) {
-				return format, "", fmt.Errorf("--format requires text or agent")
-			}
-			index++
-			parsed, err := parseHelpFormat(args[index])
-			if err != nil {
-				return format, "", err
-			}
-			format = parsed
-			seenFormat = true
-		case strings.HasPrefix(arg, "--format="):
-			if seenFormat {
-				return format, "", fmt.Errorf("--format may be specified only once")
-			}
-			parsed, err := parseHelpFormat(strings.TrimPrefix(arg, "--format="))
-			if err != nil {
-				return format, "", err
-			}
-			format = parsed
-			seenFormat = true
-		case strings.HasPrefix(arg, "-"):
-			return format, "", fmt.Errorf("unknown help flag %q", arg)
-		default:
-			selectorWords = append(selectorWords, arg)
-		}
-	}
-	return format, strings.Join(selectorWords, " "), nil
+	return c.emitResult(ctx, renderNamespaceCommandIndex(selector, commands))
 }
 
 func parseHelpFormat(value string) (helpFormat, error) {
@@ -240,24 +210,86 @@ func (c *CLI) renderRootHelp() []byte {
 	fmt.Fprintln(&output, "Global options:")
 	fmt.Fprintln(&output, "  --error-format text|json  Select structured failure presentation (default: text)")
 	fmt.Fprintln(&output)
-	output.Write(renderCommandIndex("Commands:", c.catalog.Commands()))
+	output.Write(renderRootCommandIndex(c.catalog.Commands()))
 	fmt.Fprintln(&output)
 	fmt.Fprintf(&output, "Run '%s help <command-or-namespace>' for scoped details.\n", ProgramName)
 	fmt.Fprintf(&output, "Run '%s help <command-or-namespace> --format agent' for a scoped machine contract.\n", ProgramName)
 	return output.Bytes()
 }
 
-func renderCommandIndex(title string, commands []CommandSpec) []byte {
-	var output bytes.Buffer
-	fmt.Fprintln(&output, title)
-	width := 0
+func renderRootCommandIndex(commands []CommandSpec) []byte {
+	type namespaceEntry struct {
+		name  string
+		count int
+	}
+	direct := make([]CommandSpec, 0)
+	namespaces := make([]namespaceEntry, 0)
+	namespaceIndex := make(map[string]int)
 	for _, command := range commands {
+		boundary := strings.IndexByte(command.Path, ' ')
+		if boundary < 0 {
+			direct = append(direct, command)
+			continue
+		}
+		name := command.Path[:boundary]
+		index, exists := namespaceIndex[name]
+		if !exists {
+			index = len(namespaces)
+			namespaceIndex[name] = index
+			namespaces = append(namespaces, namespaceEntry{name: name})
+		}
+		namespaces[index].count++
+	}
+
+	var output bytes.Buffer
+	fmt.Fprintln(&output, "Commands:")
+	width := 0
+	for _, command := range direct {
 		if len(command.Path) > width {
 			width = len(command.Path)
 		}
 	}
-	for _, command := range commands {
+	for _, namespace := range namespaces {
+		if len(namespace.name) > width {
+			width = len(namespace.name)
+		}
+	}
+	for _, command := range direct {
 		fmt.Fprintf(&output, "  %-*s  %s\n", width, command.Path, command.Summary)
+	}
+	for _, namespace := range namespaces {
+		fmt.Fprintf(&output, "  %-*s  Namespace with %d commands\n", width, namespace.name, namespace.count)
+	}
+	return output.Bytes()
+}
+
+func renderNamespaceCommandIndex(selector string, commands []CommandSpec) []byte {
+	labels := make([]string, 0, len(commands))
+	for _, command := range commands {
+		labels = append(labels, strings.TrimPrefix(command.Path, selector+" "))
+	}
+	return renderNamedCommandIndex("Commands in namespace "+selector+":", commands, labels)
+}
+
+func renderCommandIndex(title string, commands []CommandSpec) []byte {
+	labels := make([]string, 0, len(commands))
+	for _, command := range commands {
+		labels = append(labels, command.Path)
+	}
+	return renderNamedCommandIndex(title, commands, labels)
+}
+
+func renderNamedCommandIndex(title string, commands []CommandSpec, labels []string) []byte {
+	var output bytes.Buffer
+	fmt.Fprintln(&output, title)
+	width := 0
+	for _, label := range labels {
+		if len(label) > width {
+			width = len(label)
+		}
+	}
+	for index, command := range commands {
+		fmt.Fprintf(&output, "  %-*s  %s\n", width, labels[index], command.Summary)
 	}
 	return output.Bytes()
 }
@@ -273,6 +305,43 @@ func renderCommandHelp(command CommandSpec) []byte {
 	fmt.Fprintln(&output, "Outcome: "+command.Agent.Outcome)
 	fmt.Fprintln(&output, "Effect: "+command.Effect.String())
 	fmt.Fprintln(&output, "Role: "+command.Role.String())
+	fmt.Fprintln(&output)
+	renderHumanInvocationGrammar(&output)
+	fmt.Fprintln(&output)
+	fmt.Fprintln(&output, "Inputs:")
+	if len(command.Agent.Inputs) == 0 {
+		fmt.Fprintln(&output, "  None")
+	}
+	for _, input := range command.Agent.Inputs {
+		fmt.Fprintf(&output, "  %s\n", input.Name)
+		fmt.Fprintf(&output, "    source: %s; required: %t; value: %s; cardinality: %s\n", input.Source, input.Required, input.ValueKind, input.Cardinality)
+		fmt.Fprintf(&output, "    %s\n", input.Description)
+		if len(input.AllowedValues) != 0 {
+			fmt.Fprintf(&output, "    allowed: %s\n", strings.Join(input.AllowedValues, " | "))
+		}
+		if input.DefaultValue != nil {
+			fmt.Fprintf(&output, "    default when omitted: %q\n", *input.DefaultValue)
+		}
+		if input.Minimum != nil || input.Maximum != nil {
+			minimum, maximum := "unbounded", "unbounded"
+			if input.Minimum != nil {
+				minimum = fmt.Sprintf("%d", *input.Minimum)
+			}
+			if input.Maximum != nil {
+				maximum = fmt.Sprintf("%d", *input.Maximum)
+			}
+			fmt.Fprintf(&output, "    range: %s..%s\n", minimum, maximum)
+		}
+		if len(input.Requires) != 0 {
+			fmt.Fprintf(&output, "    requires when supplied: %s\n", strings.Join(input.Requires, ", "))
+		}
+		if len(input.ConflictsWith) != 0 {
+			fmt.Fprintf(&output, "    conflicts with: %s\n", strings.Join(input.ConflictsWith, ", "))
+		}
+		if input.ReferenceKind != "" {
+			fmt.Fprintf(&output, "    opaque reference kind: %s\n", input.ReferenceKind)
+		}
+	}
 	if target := command.Agent.FixedTarget; target != nil {
 		fmt.Fprintf(&output, "Fixed target: %s %s (%s) - %s\n", target.Kind, target.ID, target.Scope, target.Description)
 	}
@@ -283,6 +352,25 @@ func renderCommandHelp(command CommandSpec) []byte {
 		fmt.Fprintf(&output, "Consumes reference: %s from input %s\n", reference.Kind, reference.Argument)
 	}
 	return output.Bytes()
+}
+
+func renderHumanInvocationGrammar(output *bytes.Buffer) {
+	grammar := defaultAgentInvocationGrammar()
+	fmt.Fprintln(output, "Invocation grammar:")
+	fmt.Fprintf(output, "  Value flags: %s\n", strings.Join(grammar.ValueFlagForms, " or "))
+	fmt.Fprintf(output, "  Dash-prefixed flag values: %s\n", grammar.DashPrefixedFlagValueForm)
+	fmt.Fprintf(output, "  Boolean flags: %s\n", strings.Join(grammar.BooleanFlagForms, ", "))
+	fmt.Fprintf(output, "  Dash-prefixed positional values: %s\n", grammar.DashPrefixedPositionalUsage)
+}
+
+func defaultAgentInvocationGrammar() agentInvocationGrammar {
+	return agentInvocationGrammar{
+		ValueFlagForms:              []string{"--flag value", "--flag=value"},
+		DashPrefixedFlagValueForm:   "--flag=-value",
+		BooleanFlagForms:            []string{"--flag", "--flag=true", "--flag=false"},
+		PositionalOnlyMarker:        "--",
+		DashPrefixedPositionalUsage: "-- -value",
+	}
 }
 
 func (c *CLI) renderAgentIndex(commands []CommandSpec) ([]byte, error) {
@@ -334,14 +422,16 @@ func (c *CLI) renderAgentHelp(selector string, exact bool, commands []CommandSpe
 		scopeKind = "command"
 	}
 	document := agentDocument{
-		SchemaVersion: agentHelpSchemaVersion,
-		View:          "scope",
-		Program:       ProgramName,
-		Scope:         agentScope{Selector: selector, Kind: scopeKind},
+		SchemaVersion:     agentHelpSchemaVersion,
+		View:              "scope",
+		Program:           ProgramName,
+		Scope:             agentScope{Selector: selector, Kind: scopeKind},
+		InvocationGrammar: defaultAgentInvocationGrammar(),
 		GlobalInputs: []CommandInput{{
 			Name: "--error-format", Source: InputSourceFlag, Required: false,
+			ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 			Description:   "Select text or stable JSON stderr; place this global option before the command.",
-			AllowedValues: []string{"text", "json"},
+			AllowedValues: []string{"text", "json"}, DefaultValue: stringPointer("text"),
 		}},
 		ErrorContract: defaultAgentErrorContract(),
 		IOContract: agentIOContract{
@@ -384,8 +474,8 @@ func defaultAgentErrorContract() agentErrorContract {
 			{Name: "kind", Description: "Cross-command recovery class."},
 			{Name: "code", Description: "Stable command-specific failure code."},
 			{Name: "message", Description: "Safe human explanation that excludes upstream causes."},
-			{Name: "retryable", Description: "Whether retrying without changing command intent can succeed."},
-			{Name: "retry_after", Description: "Optional stable duration or null."},
+			{Name: "retryable", Description: "Whether repeating the same logical command without changing intent is permitted."},
+			{Name: "retry_after", Description: "Authoritative rate-window duration when known, otherwise null; timing never grants logical replay permission."},
 			{Name: "next_actions", Description: "Structured commands and reasons for recovery."},
 		},
 		ExitCodes: []agentExitCode{

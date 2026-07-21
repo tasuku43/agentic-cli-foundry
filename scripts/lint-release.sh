@@ -13,10 +13,12 @@ export GOWORK=off
 bash -n \
   scripts/check.sh \
   scripts/package-release.sh \
+  scripts/release-archive-entries.sh \
   scripts/render-formula.sh \
   scripts/audit-formula.sh \
   scripts/test-audit-formula.sh \
   scripts/test-check-environment.sh \
+  scripts/test-release-archive-entries.sh \
   scripts/testdata/fake-go-gate-environment.sh \
   scripts/testdata/fake-brew.sh
 if ! command -v shellcheck >/dev/null 2>&1; then
@@ -63,6 +65,10 @@ module=$(go run ./tools/projectmeta --field go_module)
 formula_class=$(go run ./tools/projectmeta --field formula_class)
 template=Formula/${binary}.rb.template
 test -f "$template"
+archive_supporting_files=(LICENSE)
+if [[ -e THIRD_PARTY_NOTICES || -L THIRD_PARTY_NOTICES ]]; then
+  archive_supporting_files+=(THIRD_PARTY_NOTICES)
+fi
 
 for required in \
   '@@FORMULA_CLASS@@' '@@DESCRIPTION@@' '@@LICENSE_SPDX@@' '@@REPOSITORY_URL@@' '@@VERSION@@' \
@@ -108,6 +114,7 @@ for required in \
   done
 done
 scripts/test-check-environment.sh >/dev/null
+scripts/test-release-archive-entries.sh >/dev/null
 
 for forbidden in 'HOMEBREW_GITHUB_API_TOKEN' 'api.github.com/repos/' 'Authorization: Bearer'; do
   if grep -R -F "$forbidden" Formula scripts/render-formula.sh .github/workflows/release.yml >/dev/null 2>&1; then
@@ -223,6 +230,7 @@ cleanup() { rm -rf -- "$release_root"; }
 trap cleanup EXIT
 release_input_roots=(
   go.mod
+  LICENSE
   .harness/project.json
   .github/workflows/release.yml
   Formula
@@ -232,6 +240,9 @@ release_input_roots=(
   internal
   tools
 )
+if [[ -e THIRD_PARTY_NOTICES || -L THIRD_PARTY_NOTICES ]]; then
+  release_input_roots+=(THIRD_PARTY_NOTICES)
+fi
 for optional_input in go.sum vendor; do
   if [[ -e $optional_input ]]; then
     release_input_roots+=("$optional_input")
@@ -314,12 +325,13 @@ for target in "${targets[@]}"; do
   test -s "$archive"
   printf '%s\n' "$asset" >>"$expected_assets"
 
+  expected_members=$(printf '%s\n' "${archive_supporting_files[@]}" "$executable")
   if [[ $extension == zip ]]; then
     members=$(unzip -Z1 "$archive")
   else
     members=$(tar -tzf "$archive")
   fi
-  if [[ $members != "$executable" ]]; then
+  if [[ $members != "$expected_members" ]]; then
     echo "archive $asset contains unexpected entries: $members" >&2
     exit 1
   fi
@@ -331,10 +343,17 @@ for target in "${targets[@]}"; do
   else
     tar -xzf "$archive" -C "$extract_dir"
   fi
-  if [[ $(find "$extract_dir" -type f | wc -l | tr -d ' ') -ne 1 || ! -f $extract_dir/$executable ]]; then
-    echo "archive $asset did not extract to exactly $executable" >&2
+  expected_file_count=$((${#archive_supporting_files[@]} + 1))
+  if [[ $(find "$extract_dir" -type f | wc -l | tr -d ' ') -ne $expected_file_count || ! -f $extract_dir/$executable ]]; then
+    echo "archive $asset did not extract to its exact executable and supporting-file set" >&2
     exit 1
   fi
+  for supporting_file in "${archive_supporting_files[@]}"; do
+    if [[ ! -f $extract_dir/$supporting_file ]] || ! cmp -s "$supporting_file" "$extract_dir/$supporting_file"; then
+      echo "archive $asset does not contain the reviewed $supporting_file bytes" >&2
+      exit 1
+    fi
+  done
   metadata=$(go version -m "$extract_dir/$executable")
   for required_metadata in "$module" "GOOS=$goos" "GOARCH=$goarch"; do
     if ! printf '%s\n' "$metadata" | grep -Fq "$required_metadata"; then

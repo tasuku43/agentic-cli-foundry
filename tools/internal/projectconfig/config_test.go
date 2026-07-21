@@ -12,12 +12,55 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".harness"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	raw := `{"schema_version":1,"profile":"template","project":{},"public_guard":{},"unknown":true}`
+	raw := `{"schema_version":2,"profile":"template","project":{},"public_guard":{},"unknown":true}`
 	if err := os.WriteFile(filepath.Join(root, ".harness", "project.json"), []byte(raw), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(root); err == nil || !strings.Contains(err.Error(), "unknown") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadExplainsSchemaOneLocaleMigrationWithoutChoosingADefault(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".harness"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"schema_version":1,"profile":"ready","project":{"name":"Example Tool","binary_name":"example-tool","go_module":"example.com/example/tool","github_owner":"example","github_repository":"example-tool","description":"Example tool.","formula_class":"ExampleTool","license_spdx":"MIT","security_contact":"security@example.com"},"public_guard":{"denylist_file":".harness/denylist.txt","required_paths":[]}}`
+	if err := os.WriteFile(filepath.Join(root, ".harness", "project.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(root)
+	if err == nil || !strings.Contains(err.Error(), "requires explicit migration") ||
+		!strings.Contains(err.Error(), "documentation_locale") || !strings.Contains(err.Error(), "no locale default") {
+		t.Fatalf("schema 1 migration error = %v", err)
+	}
+}
+
+func TestWriteAndLoadPreserveExplicitNonEnglishLocale(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".harness"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := Config{
+		SchemaVersion: SchemaVersion,
+		Profile:       "ready",
+		Project:       Defaults,
+		PublicGuard: PublicGuard{
+			DocumentationLocale: "ja",
+			DenylistFile:        ".harness/denylist.txt",
+			Required:            []string{},
+		},
+	}
+	if err := Write(root, config); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PublicGuard.DocumentationLocale != "ja" {
+		t.Fatalf("documentation locale = %q", loaded.PublicGuard.DocumentationLocale)
 	}
 }
 
@@ -87,7 +130,7 @@ func TestConfigRejectsWindowsReservedBinaryNames(t *testing.T) {
 		SchemaVersion: SchemaVersion,
 		Profile:       "template",
 		Project:       Defaults,
-		PublicGuard:   PublicGuard{DenylistFile: ".harness/denylist.txt"},
+		PublicGuard:   PublicGuard{DocumentationLocale: "en", DenylistFile: ".harness/denylist.txt"},
 	}
 	for _, name := range []string{"con", "aux", "prn", "nul", "com1", "com9", "lpt1", "lpt9", "Con", "cOm1", "LpT9"} {
 		config.Project.BinaryName = name
@@ -101,9 +144,45 @@ func TestConfigRejectsWindowsReservedBinaryNames(t *testing.T) {
 			t.Fatalf("Validate() rejected binary_name %q: %v", name, err)
 		}
 	}
+	config.Project.BinaryName = "license"
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "release archive LICENSE") {
+		t.Fatalf("Validate() accepted release-support collision: %v", err)
+	}
+	config.Project.BinaryName = strings.Repeat("a", maximumBinaryNameBytes)
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate() rejected maximum portable release basename: %v", err)
+	}
+	config.Project.BinaryName = strings.Repeat("a", maximumBinaryNameBytes+1)
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "at most 96 bytes") {
+		t.Fatalf("Validate() accepted overlong release basename: %v", err)
+	}
 	for _, name := range []string{"Con", "cOm1", "LpT9"} {
 		if !isWindowsReservedBaseName(name) {
 			t.Fatalf("isWindowsReservedBaseName(%q) = false", name)
+		}
+	}
+}
+
+func TestConfigRequiresExplicitDocumentationLocale(t *testing.T) {
+	config := Config{
+		SchemaVersion: SchemaVersion,
+		Profile:       "template",
+		Project:       Defaults,
+		PublicGuard: PublicGuard{
+			DocumentationLocale: "en",
+			DenylistFile:        ".harness/denylist.txt",
+		},
+	}
+	for _, locale := range []string{"en", "ja", "pt-BR"} {
+		config.PublicGuard.DocumentationLocale = locale
+		if err := config.Validate(); err != nil {
+			t.Fatalf("Validate() rejected locale %q: %v", locale, err)
+		}
+	}
+	for _, locale := range []string{"", "English", "en_US", "-ja", "ja-"} {
+		config.PublicGuard.DocumentationLocale = locale
+		if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "documentation_locale") {
+			t.Fatalf("Validate() accepted locale %q: %v", locale, err)
 		}
 	}
 }

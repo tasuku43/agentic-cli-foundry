@@ -14,7 +14,9 @@ import (
 	"github.com/tasuku43/agentic-cli-foundry/internal/domain/operation"
 )
 
-func noOpHandler(context.Context, *CLI, CommandSpec, operation.Intent, []string) int { return ExitOK }
+func noOpHandler(context.Context, *CLI, CommandSpec, operation.Intent, ParsedInputs) int {
+	return ExitOK
+}
 
 func utilitySpec(path string) CommandSpec {
 	return CommandSpec{
@@ -35,6 +37,7 @@ func utilitySpec(path string) CommandSpec {
 			},
 			Prerequisites: []string{},
 			Errors: []CommandError{
+				declaredCommandError(fault.KindInvalidInput, "invalid_arguments", false, path, "Correct the command arguments."),
 				{
 					Code:        "test_failed",
 					Kind:        fault.KindInternal,
@@ -57,7 +60,18 @@ func mutationRuntimeErrors(path string) []CommandError {
 		declaredCommandError(fault.KindRejected, "missing_mutation_policy", false, path, "Configure the project mutation policy."),
 		declaredCommandError(fault.KindRejected, "mutation_rejected", false, path, "Review the project mutation policy."),
 		declaredCommandError(fault.KindContract, "unclassified_mutation_outcome", false, namespace+" list", "Reconcile the target before deciding whether another mutation is safe."),
+		declaredCommandError(fault.KindInternal, "mutation_output_write_failed", false, namespace+" list", "Reconcile the confirmed mutation result without repeating the mutation."),
 	}
+}
+
+func mutationErrors(base []CommandError, path string) []CommandError {
+	errors := make([]CommandError, 0, len(base)+len(mutationRuntimeErrors(path)))
+	for _, declared := range base {
+		if declared.Code != "output_write_failed" {
+			errors = append(errors, declared)
+		}
+	}
+	return append(errors, mutationRuntimeErrors(path)...)
 }
 
 func authenticationGateRuntimeErrors(path string) []CommandError {
@@ -105,6 +119,7 @@ func actSpec(path, kind string, inputs ...string) CommandSpec {
 	for _, input := range inputs {
 		spec.Agent.Inputs = append(spec.Agent.Inputs, CommandInput{
 			Name: input, Source: InputSourceFlag, Required: true,
+			ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 			Description: "Opaque test item ID.", AllowedValues: []string{}, ReferenceKind: kind,
 		})
 		parts = append(parts, input, "<"+kind+"-id>")
@@ -223,10 +238,10 @@ func TestArgumentSyntaxRequiredAndAllowedValuesMatchAgentInputs(t *testing.T) {
 	valid := utilitySpec("configure")
 	valid.Args = "[--mode fast|safe] <target> [label]"
 	valid.Agent.Inputs = []CommandInput{
-		{Name: "--mode", Source: InputSourceFlag, Required: false, Description: "Select the operating mode.", AllowedValues: []string{"fast", "safe"}},
-		{Name: "target", Source: InputSourceArgument, Required: true, Description: "Target value.", AllowedValues: []string{}},
-		{Name: "label", Source: InputSourceArgument, Required: false, Description: "Optional display label.", AllowedValues: []string{}},
-		{Name: "CLI_PROFILE", Source: InputSourceEnvironment, Required: false, Description: "Optional environment profile.", AllowedValues: []string{}},
+		{Name: "--mode", Source: InputSourceFlag, Required: false, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Select the operating mode.", AllowedValues: []string{"fast", "safe"}},
+		{Name: "target", Source: InputSourceArgument, Required: true, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Target value.", AllowedValues: []string{}},
+		{Name: "label", Source: InputSourceArgument, Required: false, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Optional display label.", AllowedValues: []string{}},
+		{Name: "CLI_PROFILE", Source: InputSourceEnvironment, Required: false, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Optional environment profile.", AllowedValues: []string{}},
 	}
 	if err := NewCatalog(valid).Validate(); err != nil {
 		t.Fatalf("valid small argument grammar: %v", err)
@@ -256,6 +271,7 @@ func TestArgumentSyntaxAllowsOneExactFixedFlagValue(t *testing.T) {
 	valid.Args = "--confirm=destructive"
 	valid.Agent.Inputs = []CommandInput{{
 		Name: "--confirm", Source: InputSourceFlag, Required: true,
+		ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 		Description: "Confirm the exact mutation class.", AllowedValues: []string{"destructive"},
 	}}
 	if err := NewCatalog(valid).Validate(); err != nil {
@@ -391,6 +407,60 @@ func TestCatalogRequiresCommonRuntimeFailures(t *testing.T) {
 	if err := NewCatalog(noOutput).Validate(); err == nil || !strings.Contains(err.Error(), "none output format requires collection coverage") {
 		t.Fatalf("no-output command with collection coverage error = %v", err)
 	}
+
+	readWithMutationFailure := utilitySpec("read")
+	readWithMutationFailure.Agent.Errors = append(readWithMutationFailure.Agent.Errors, declaredCommandError(
+		fault.KindInternal, "mutation_output_write_failed", false, "read", "Reconcile without mutation replay.",
+	))
+	if err := NewCatalog(readWithMutationFailure).Validate(); err == nil || !strings.Contains(err.Error(), "must not declare mutation_output_write_failed") {
+		t.Fatalf("read command with mutation output failure error = %v", err)
+	}
+
+	noOutputWithWriteFailure := cloneCommandSpec(noOutput)
+	noOutputWithWriteFailure.Agent.Output.CollectionCoverage = CollectionCoverageNotApplicable
+	noOutputWithWriteFailure.Agent.Errors = append(noOutputWithWriteFailure.Agent.Errors, declaredCommandError(
+		fault.KindInternal, "output_write_failed", true, "read", "Retry with a writable stream.",
+	))
+	if err := NewCatalog(noOutputWithWriteFailure).Validate(); err == nil || !strings.Contains(err.Error(), "without output") {
+		t.Fatalf("no-output command with write failure error = %v", err)
+	}
+}
+
+func TestInputRelationsMustLeaveEveryDeclaredInputUsable(t *testing.T) {
+	base := utilitySpec("inspect")
+	base.Args = "[--a <value>] [--b <value>] [--c <value>]"
+	base.Agent.Inputs = []CommandInput{
+		{Name: "--a", Source: InputSourceFlag, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Optional A.", AllowedValues: []string{}},
+		{Name: "--b", Source: InputSourceFlag, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Optional B.", AllowedValues: []string{}},
+		{Name: "--c", Source: InputSourceFlag, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Optional C.", AllowedValues: []string{}},
+	}
+	if err := NewCatalog(base).Validate(); err != nil {
+		t.Fatalf("valid independent optional inputs: %v", err)
+	}
+
+	optionalConflictsRequired := cloneCommandSpec(base)
+	optionalConflictsRequired.Args = "--b <value> [--a <value>] [--c <value>]"
+	optionalConflictsRequired.Agent.Inputs[1].Required = true
+	optionalConflictsRequired.Agent.Inputs[0].ConflictsWith = []string{"--b"}
+	if err := NewCatalog(optionalConflictsRequired).Validate(); err == nil || !strings.Contains(err.Error(), "unusable") {
+		t.Fatalf("optional input conflicting with required input error = %v", err)
+	}
+
+	requiredRequiresOptional := cloneCommandSpec(base)
+	requiredRequiresOptional.Args = "--a <value> [--b <value>] [--c <value>]"
+	requiredRequiresOptional.Agent.Inputs[0].Required = true
+	requiredRequiresOptional.Agent.Inputs[0].Requires = []string{"--b"}
+	if err := NewCatalog(requiredRequiresOptional).Validate(); err == nil || !strings.Contains(err.Error(), "effectively mandatory") {
+		t.Fatalf("required input requiring optional input error = %v", err)
+	}
+
+	transitiveConflict := cloneCommandSpec(base)
+	transitiveConflict.Agent.Inputs[0].Requires = []string{"--b"}
+	transitiveConflict.Agent.Inputs[1].Requires = []string{"--c"}
+	transitiveConflict.Agent.Inputs[0].ConflictsWith = []string{"--c"}
+	if err := NewCatalog(transitiveConflict).Validate(); err == nil || !strings.Contains(err.Error(), "unusable") {
+		t.Fatalf("transitive dependency conflict error = %v", err)
+	}
 }
 
 func TestAgentContractValidationFailsClosed(t *testing.T) {
@@ -400,21 +470,21 @@ func TestAgentContractValidationFailsClosed(t *testing.T) {
 		"unknown inputs":     func(spec *CommandSpec) { spec.Agent.Inputs = nil },
 		"unknown input source": func(spec *CommandSpec) {
 			spec.Args = "--id <item-id>"
-			spec.Agent.Inputs = []CommandInput{{Name: "--id", Required: true, Description: "Item ID.", AllowedValues: []string{}}}
+			spec.Agent.Inputs = []CommandInput{{Name: "--id", Required: true, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Item ID.", AllowedValues: []string{}}}
 		},
 		"undocumented argument": func(spec *CommandSpec) {
 			spec.Args = "--id <item-id>"
 		},
 		"input absent from syntax": func(spec *CommandSpec) {
-			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, Description: "Item ID.", AllowedValues: []string{}}}
+			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Item ID.", AllowedValues: []string{}}}
 		},
 		"missing input description": func(spec *CommandSpec) {
 			spec.Args = "--id <item-id>"
-			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, AllowedValues: []string{}}}
+			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, AllowedValues: []string{}}}
 		},
 		"unknown allowed values": func(spec *CommandSpec) {
 			spec.Args = "--id <item-id>"
-			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, Description: "Item ID."}}
+			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Item ID."}}
 		},
 		"unknown formats":        func(spec *CommandSpec) { spec.Agent.Output.Formats = nil },
 		"unknown default format": func(spec *CommandSpec) { spec.Agent.Output.DefaultFormat = OutputFormatUnknown },
@@ -511,7 +581,7 @@ func TestCatalogValidatesCommandBoundToolLocalFixedTargets(t *testing.T) {
 		"non-act role":        func(spec *CommandSpec) { spec.Role = RoleUtility },
 		"consumed reference": func(spec *CommandSpec) {
 			spec.Args = "--id <auth-config-id>"
-			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, Required: true, Description: "Opaque config ID.", AllowedValues: []string{}, ReferenceKind: "auth-config"}}
+			spec.Agent.Inputs = []CommandInput{{Name: "--id", Source: InputSourceFlag, Required: true, ValueKind: InputValueText, Cardinality: InputCardinalitySingle, Description: "Opaque config ID.", AllowedValues: []string{}, ReferenceKind: "auth-config"}}
 		},
 		"produced reference": func(spec *CommandSpec) {
 			spec.Agent.Output.Fields[0].ReferenceKind = "auth-config"
@@ -546,9 +616,10 @@ func TestFixedTargetMutationPreservesMutationSafetyContract(t *testing.T) {
 	status := fixedTargetActSpec("auth status")
 	write := fixedTargetActSpec("auth reset")
 	write.Effect = operation.EffectWrite
-	write.Agent.Errors = append(write.Agent.Errors, mutationRuntimeErrors(write.Path)...)
+	write.Agent.Errors = mutationErrors(write.Agent.Errors, write.Path)
 	for index := range write.Agent.Errors {
-		if write.Agent.Errors[index].Code == "unclassified_mutation_outcome" {
+		if write.Agent.Errors[index].Code == "unclassified_mutation_outcome" ||
+			write.Agent.Errors[index].Code == "mutation_output_write_failed" {
 			write.Agent.Errors[index].NextActions[0].Command = status.Path
 		}
 	}
@@ -613,6 +684,7 @@ func TestReferenceGraphRejectsClosedCyclesAndAcceptsReachableChains(t *testing.T
 	items.Args = "--workspace-id <workspace-id>"
 	items.Agent.Inputs = []CommandInput{{
 		Name: "--workspace-id", Source: InputSourceFlag, Required: true,
+		ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 		Description: "Opaque workspace ID.", AllowedValues: []string{}, ReferenceKind: "workspace",
 	}}
 	read := actSpec("items read", "item", "--id")
@@ -644,7 +716,7 @@ func TestInvalidCatalogFailsBeforeDispatch(t *testing.T) {
 	called := false
 	bad := utilitySpec("unsafe")
 	bad.Effect = operation.EffectUnknown
-	bad.handler = func(context.Context, *CLI, CommandSpec, operation.Intent, []string) int {
+	bad.handler = func(context.Context, *CLI, CommandSpec, operation.Intent, ParsedInputs) int {
 		called = true
 		return ExitOK
 	}
@@ -687,10 +759,11 @@ func TestMutationContractFailsClosedAndDeepCopies(t *testing.T) {
 	spec := utilitySpec("items update")
 	spec.Effect = operation.EffectWrite
 	spec.Role = RoleAct
-	spec.Agent.Errors = append(spec.Agent.Errors, mutationRuntimeErrors(spec.Path)...)
+	spec.Agent.Errors = mutationErrors(spec.Agent.Errors, spec.Path)
 	spec.Args = "--id <item-id>"
 	spec.Agent.Inputs = []CommandInput{{
 		Name: "--id", Source: InputSourceFlag, Required: true,
+		ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 		Description: "Target item ID.", AllowedValues: []string{}, ReferenceKind: "item",
 	}}
 	spec.Agent.Mutation = &MutationContract{
@@ -706,15 +779,50 @@ func TestMutationContractFailsClosedAndDeepCopies(t *testing.T) {
 	if err := NewCatalog(discoverSpec("items list", "item"), spec).Validate(); err != nil {
 		t.Fatalf("valid act mutation catalog: %v", err)
 	}
-	unsafeRecovery := cloneCommandSpec(spec)
-	for index := range unsafeRecovery.Agent.Errors {
-		if unsafeRecovery.Agent.Errors[index].Code == "unclassified_mutation_outcome" {
-			unsafeRecovery.Agent.Errors[index].NextActions[0].Command = unsafeRecovery.Path
+	withReadOutputFailure := cloneCommandSpec(spec)
+	withReadOutputFailure.Agent.Errors = append(withReadOutputFailure.Agent.Errors, declaredCommandError(
+		fault.KindInternal,
+		"output_write_failed",
+		true,
+		withReadOutputFailure.Path,
+		"Retry the mutation with a writable output stream.",
+	))
+	if err := NewCatalog(discoverSpec("items list", "item"), withReadOutputFailure).Validate(); err == nil ||
+		!strings.Contains(err.Error(), "must not declare retryable output_write_failed") {
+		t.Fatalf("mutation with read output failure error = %v", err)
+	}
+	for _, code := range []string{"unclassified_mutation_outcome", "mutation_output_write_failed"} {
+		unsafeRecovery := cloneCommandSpec(spec)
+		for index := range unsafeRecovery.Agent.Errors {
+			if unsafeRecovery.Agent.Errors[index].Code == code {
+				unsafeRecovery.Agent.Errors[index].NextActions[0].Command = unsafeRecovery.Path
+			}
+		}
+		if err := NewCatalog(discoverSpec("items list", "item"), unsafeRecovery).Validate(); err == nil ||
+			!strings.Contains(err.Error(), "read-only reconciliation") {
+			t.Fatalf("unsafe %s recovery error = %v", code, err)
 		}
 	}
-	if err := NewCatalog(discoverSpec("items list", "item"), unsafeRecovery).Validate(); err == nil ||
+
+	rateLimited := cloneCommandSpec(spec)
+	rateLimited.Agent.Errors = append(rateLimited.Agent.Errors, declaredCommandError(
+		fault.KindRateLimited,
+		"mutation_rate_limited",
+		false,
+		rateLimited.Path,
+		"Wait for the provider window, then reconcile before deciding on another mutation.",
+	))
+	if err := NewCatalog(discoverSpec("items list", "item"), rateLimited).Validate(); err == nil ||
 		!strings.Contains(err.Error(), "read-only reconciliation") {
-		t.Fatalf("unsafe unknown-outcome recovery error = %v", err)
+		t.Fatalf("unsafe non-retryable rate-limit recovery error = %v", err)
+	}
+	for index := range rateLimited.Agent.Errors {
+		if rateLimited.Agent.Errors[index].Code == "mutation_rate_limited" {
+			rateLimited.Agent.Errors[index].NextActions[0].Command = "items list"
+		}
+	}
+	if err := NewCatalog(discoverSpec("items list", "item"), rateLimited).Validate(); err != nil {
+		t.Fatalf("read-only rate-limit recovery rejected: %v", err)
 	}
 
 	missing := cloneCommandSpec(spec)
@@ -750,7 +858,10 @@ func TestMutationContractFailsClosedAndDeepCopies(t *testing.T) {
 	}
 	configuredTarget := cloneCommandSpec(spec)
 	configuredTarget.Args = ""
+	configuredTarget.Agent.Inputs[0].Name = "id"
 	configuredTarget.Agent.Inputs[0].Source = InputSourceConfiguration
+	configuredTarget.Agent.Mutation.TargetInputs[0] = "id"
+	configuredTarget.Agent.Mutation.TargetIDInput = "id"
 	if err := validateAgentContract(configuredTarget); err == nil || !strings.Contains(err.Error(), "command argument or flag") {
 		t.Fatalf("non-CLI mutation target error = %v", err)
 	}
@@ -758,6 +869,7 @@ func TestMutationContractFailsClosedAndDeepCopies(t *testing.T) {
 	withParent.Args += " --collection-id <collection-id>"
 	withParent.Agent.Inputs = append(withParent.Agent.Inputs, CommandInput{
 		Name: "--collection-id", Source: InputSourceFlag, Required: true,
+		ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 		Description: "Parent collection ID.", AllowedValues: []string{}, ReferenceKind: "collection",
 	})
 	withParent.Agent.Mutation.ParentInput = "--collection-id"
@@ -769,6 +881,7 @@ func TestMutationContractFailsClosedAndDeepCopies(t *testing.T) {
 	ambiguousTargets.Args += " --scope-id <scope-id>"
 	ambiguousTargets.Agent.Inputs = append(ambiguousTargets.Agent.Inputs, CommandInput{
 		Name: "--scope-id", Source: InputSourceFlag, Required: true,
+		ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 		Description: "Unbound scope ID.", AllowedValues: []string{}, ReferenceKind: "scope",
 	})
 	ambiguousTargets.Agent.Mutation.TargetInputs = append(ambiguousTargets.Agent.Mutation.TargetInputs, "--scope-id")
@@ -790,10 +903,11 @@ func TestMutationContractRequiresInvokerFailureSurface(t *testing.T) {
 	spec := utilitySpec("items update")
 	spec.Effect = operation.EffectWrite
 	spec.Role = RoleAct
-	spec.Agent.Errors = append(spec.Agent.Errors, mutationRuntimeErrors(spec.Path)...)
+	spec.Agent.Errors = mutationErrors(spec.Agent.Errors, spec.Path)
 	spec.Args = "--id <item-id>"
 	spec.Agent.Inputs = []CommandInput{{
 		Name: "--id", Source: InputSourceFlag, Required: true,
+		ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 		Description: "Target item ID.", AllowedValues: []string{}, ReferenceKind: "item",
 	}}
 	spec.Agent.Mutation = &MutationContract{
@@ -806,7 +920,7 @@ func TestMutationContractRequiresInvokerFailureSurface(t *testing.T) {
 	if err := validateAgentContract(spec); err != nil {
 		t.Fatalf("valid mutation failure surface: %v", err)
 	}
-	for _, missing := range []string{"invalid_mutation_contract", "missing_mutation_action", "missing_mutation_policy", "mutation_rejected", "unclassified_mutation_outcome"} {
+	for _, missing := range []string{"invalid_mutation_contract", "missing_mutation_action", "missing_mutation_policy", "mutation_rejected", "unclassified_mutation_outcome", "mutation_output_write_failed"} {
 		t.Run(missing, func(t *testing.T) {
 			candidate := cloneCommandSpec(spec)
 			filtered := make([]CommandError, 0, len(candidate.Agent.Errors)-1)
@@ -827,10 +941,11 @@ func TestCreateMutationBindsOpaqueParentOnly(t *testing.T) {
 	spec := utilitySpec("items create")
 	spec.Effect = operation.EffectCreate
 	spec.Role = RoleAct
-	spec.Agent.Errors = append(spec.Agent.Errors, mutationRuntimeErrors(spec.Path)...)
+	spec.Agent.Errors = mutationErrors(spec.Agent.Errors, spec.Path)
 	spec.Args = "--collection-id <collection-id>"
 	spec.Agent.Inputs = []CommandInput{{
 		Name: "--collection-id", Source: InputSourceFlag, Required: true,
+		ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 		Description: "Parent collection ID.", AllowedValues: []string{}, ReferenceKind: "collection",
 	}}
 	spec.Agent.Mutation = &MutationContract{

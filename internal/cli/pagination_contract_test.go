@@ -12,6 +12,7 @@ func pagedDiscoverSpec(path, itemKind, cursorKind string) CommandSpec {
 	spec.Args = "[--cursor <cursor>]"
 	spec.Agent.Inputs = append(spec.Agent.Inputs, CommandInput{
 		Name: "--cursor", Source: InputSourceFlag, Required: false,
+		ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 		Description: "Opaque cursor returned by the preceding page.", AllowedValues: []string{}, ReferenceKind: cursorKind,
 	})
 	spec.Agent.Output.Formats = []OutputFormat{OutputFormatJSON}
@@ -172,7 +173,9 @@ func TestPaginationContractFailsClosed(t *testing.T) {
 		"non CLI input": {
 			mutate: func(spec *CommandSpec) {
 				spec.Args = ""
+				spec.Agent.Inputs[0].Name = "cursor"
 				spec.Agent.Inputs[0].Source = InputSourceConfiguration
+				spec.Agent.Pagination.CursorInput = "cursor"
 			},
 			want: "must be a command argument or flag",
 		},
@@ -231,6 +234,7 @@ func TestPaginationContractFailsClosed(t *testing.T) {
 				spec.Args += " [--resume <cursor>]"
 				spec.Agent.Inputs = append(spec.Agent.Inputs, CommandInput{
 					Name: "--resume", Source: InputSourceFlag, Required: false,
+					ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
 					Description: "Ambiguous second cursor.", AllowedValues: []string{}, ReferenceKind: "item-page",
 				})
 			},

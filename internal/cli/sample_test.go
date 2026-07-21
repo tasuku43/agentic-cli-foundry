@@ -127,6 +127,7 @@ func TestSampleReadRejectsURLWhitespaceAndAmbiguousInputBeforeRepository(t *test
 		{"sample", "read", "--id"},
 		{"sample", "read", "--id="},
 		{"sample", "read", "--id", "--unknown"},
+		{"sample", "read", "--id", "--format"},
 		{"sample", "read", "--id=", "--id", "smp_2f4a6c8e0b1d"},
 		{"sample", "read", "--id", "smp_2f4a6c8e0b1d", "--id", "smp_91b3d5f7a2c4"},
 		{"sample", "read", "Alpha"},

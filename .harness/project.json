@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "profile": "template",
   "project": {
     "name": "Agentic CLI Foundry",
@@ -13,6 +13,7 @@
     "security_contact": "security@agentic-cli-foundry.example"
   },
   "public_guard": {
+    "documentation_locale": "en",
     "denylist_file": ".harness/denylist.txt",
     "required_paths": [
       "README.md",

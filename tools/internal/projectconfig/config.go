@@ -13,7 +13,10 @@ import (
 	"strings"
 )
 
-const SchemaVersion = 1
+const (
+	SchemaVersion          = 2
+	maximumBinaryNameBytes = 96 // Leaves room for the mandatory Windows .exe suffix under the 100-byte archive-entry limit.
+)
 
 type Config struct {
 	SchemaVersion int         `json:"schema_version"`
@@ -35,8 +38,9 @@ type Project struct {
 }
 
 type PublicGuard struct {
-	DenylistFile string   `json:"denylist_file"`
-	Required     []string `json:"required_paths"`
+	DocumentationLocale string   `json:"documentation_locale"`
+	DenylistFile        string   `json:"denylist_file"`
+	Required            []string `json:"required_paths"`
 }
 
 var (
@@ -46,6 +50,7 @@ var (
 	repoPattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 	formulaPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
 	licensePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+-]*$`)
+	localePattern  = regexp.MustCompile(`^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$`)
 )
 
 func Load(root string) (Config, error) {
@@ -92,6 +97,9 @@ func Write(root string, config Config) error {
 }
 
 func (c Config) Validate() error {
+	if c.SchemaVersion == 1 {
+		return errors.New("project config schema_version 1 requires explicit migration: choose the trusted documentation locale in the project thesis or product contract, add public_guard.documentation_locale, then set schema_version to 2; no locale default is applied")
+	}
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("project config schema_version = %d, want %d", c.SchemaVersion, SchemaVersion)
 	}
@@ -105,8 +113,11 @@ func (c Config) Validate() error {
 	if isWindowsReservedBaseName(p.BinaryName) {
 		return fmt.Errorf("binary_name %q is a reserved Windows device basename", p.BinaryName)
 	}
-	if !binaryPattern.MatchString(p.BinaryName) {
-		return fmt.Errorf("binary_name %q must match %s", p.BinaryName, binaryPattern)
+	if !binaryPattern.MatchString(p.BinaryName) || len(p.BinaryName) > maximumBinaryNameBytes {
+		return fmt.Errorf("binary_name %q must match %s and contain at most %d bytes", p.BinaryName, binaryPattern, maximumBinaryNameBytes)
+	}
+	if strings.EqualFold(p.BinaryName, "LICENSE") {
+		return fmt.Errorf("binary_name %q collides with the required release archive LICENSE entry", p.BinaryName)
 	}
 	if err := validateModule(p.GoModule); err != nil {
 		return err
@@ -132,6 +143,9 @@ func (c Config) Validate() error {
 	}
 	if address.Address != p.SecurityContact {
 		return errors.New("security_contact must contain only an email address")
+	}
+	if !localePattern.MatchString(c.PublicGuard.DocumentationLocale) {
+		return fmt.Errorf("public_guard.documentation_locale %q must be one explicit language tag", c.PublicGuard.DocumentationLocale)
 	}
 	if c.PublicGuard.DenylistFile == "" || filepath.IsAbs(c.PublicGuard.DenylistFile) || !filepath.IsLocal(c.PublicGuard.DenylistFile) {
 		return errors.New("public_guard.denylist_file must be a local relative path")

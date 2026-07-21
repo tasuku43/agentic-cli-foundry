@@ -24,42 +24,6 @@ func parseSuccessFormat(value string) (successFormat, error) {
 	}
 }
 
-func parseFormatOnlyArgs(args []string) (successFormat, error) {
-	format := successFormatTSV
-	seen := false
-	for index := 0; index < len(args); index++ {
-		argument := args[index]
-		var value string
-		switch {
-		case argument == "--format":
-			if seen {
-				return format, fmt.Errorf("--format may be specified only once")
-			}
-			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
-				return format, fmt.Errorf("--format requires tsv or json")
-			}
-			index++
-			value = args[index]
-		case strings.HasPrefix(argument, "--format="):
-			if seen {
-				return format, fmt.Errorf("--format may be specified only once")
-			}
-			value = strings.TrimPrefix(argument, "--format=")
-		case strings.HasPrefix(argument, "-"):
-			return format, fmt.Errorf("unknown flag %q", argument)
-		default:
-			return format, fmt.Errorf("unexpected argument %q", argument)
-		}
-		parsed, err := parseSuccessFormat(value)
-		if err != nil {
-			return format, err
-		}
-		format = parsed
-		seen = true
-	}
-	return format, nil
-}
-
 // safeExternalText makes structural runes visible without interpreting the
 // remaining text. Backslashes are escaped first so a literal sequence such as
 // \n stays distinguishable from a projected newline. Opaque IDs bypass this

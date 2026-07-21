@@ -9,6 +9,7 @@ export GOFIPS140=off
 export GOFLAGS=
 export GOTOOLCHAIN=local
 export GOWORK=off
+source scripts/release-archive-entries.sh
 
 if [[ $# -ne 5 ]]; then
   echo "usage: $0 <tag> <revision> <goos> <goarch> <output-dir>" >&2
@@ -75,11 +76,27 @@ if [[ $goos == "$host_os" && $goarch == "$host_arch" ]]; then
   fi
 fi
 
-go run ./tools/archivepack "$archive_format" "$work_dir/$executable" "$executable" "$work_dir/$archive"
+release_archive_entries "$work_dir/$executable" "$executable"
+expected_members=("${archive_supporting_files[@]}")
+expected_members+=("$executable")
+
+go run ./tools/archivepack \
+  "$archive_format" \
+  "$work_dir/$archive" \
+  "${archive_entries[@]}"
+go run ./tools/archivepack verify \
+  "$archive_format" \
+  "$work_dir/$archive" \
+  "${archive_entries[@]}"
+expected_member_list=$(printf '%s\n' "${expected_members[@]}")
 if [[ $goos == windows ]]; then
-  [[ $(unzip -Z1 "$work_dir/$archive") == "$executable" ]]
+  members=$(unzip -Z1 "$work_dir/$archive")
 else
-  [[ $(tar -tzf "$work_dir/$archive") == "$executable" ]]
+  members=$(tar -tzf "$work_dir/$archive")
+fi
+if [[ $members != "$expected_member_list" ]]; then
+  echo "release archive contains unexpected entries: $members" >&2
+  exit 1
 fi
 if ! ln "$work_dir/$archive" "$archive_path"; then
   echo "release archive appeared during build or cannot be created without overwrite: $archive_path" >&2

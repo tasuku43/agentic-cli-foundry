@@ -100,6 +100,7 @@ func (c *CLI) RunContext(ctx context.Context, args []string) int {
 	}
 
 	commandArgs = normalizeRootAlias(commandArgs)
+	commandArgs = normalizeTrailingHelpAlias(c.catalog, commandArgs)
 	command, rest, found := c.catalog.Match(commandArgs)
 	if !found {
 		return c.failUsage(
@@ -111,11 +112,26 @@ func (c *CLI) RunContext(ctx context.Context, args []string) int {
 		)
 	}
 	ctx = withCommandPath(ctx, command.Path)
-	if len(rest) == 1 && isHelpFlag(rest[0]) {
-		return c.emit(ctx, renderCommandHelp(command))
-	}
 	if err := ctx.Err(); err != nil {
 		return c.fail(ctx, err)
+	}
+	inputs, err := parseCommandInputs(command, rest)
+	if err != nil {
+		var nextActions []fault.NextAction
+		for _, declared := range command.Agent.Errors {
+			if declared.Code == "invalid_arguments" {
+				nextActions = cloneSlice(declared.NextActions)
+				break
+			}
+		}
+		return c.fail(ctx, fault.Wrap(
+			fault.KindInvalidInput,
+			"invalid_arguments",
+			err.Error()+"; usage: "+command.Usage(),
+			false,
+			err,
+			nextActions...,
+		))
 	}
 
 	intent := operation.Intent{Command: command.Path, Effect: command.Effect}
@@ -131,7 +147,19 @@ func (c *CLI) RunContext(ctx context.Context, args []string) int {
 			))
 		}
 	}
-	return command.handler(ctx, c, command, intent, rest)
+	return command.handler(ctx, c, command, intent, inputs)
+}
+
+func normalizeTrailingHelpAlias(catalog Catalog, args []string) []string {
+	if len(args) < 2 || !isHelpFlag(args[len(args)-1]) {
+		return args
+	}
+	selector := strings.Join(args[:len(args)-1], " ")
+	commands, _ := catalog.Select(selector)
+	if len(commands) == 0 {
+		return args
+	}
+	return append([]string{"help"}, args[:len(args)-1]...)
 }
 
 func normalizeRootAlias(args []string) []string {

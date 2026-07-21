@@ -257,6 +257,7 @@ func TestApplyRenamesRepositoryIdentityInPaths(t *testing.T) {
 func TestApplyConfiguredPreviewsAndCommitsProfileWithIdentity(t *testing.T) {
 	root := t.TempDir()
 	config := configuredFixture()
+	config.PublicGuard.DocumentationLocale = "ja"
 	writeConfigFixture(t, root, config)
 	writeFixture(t, root, "README.md", projectconfig.Defaults.Name+"\n")
 
@@ -284,6 +285,9 @@ func TestApplyConfiguredPreviewsAndCommitsProfileWithIdentity(t *testing.T) {
 	}
 	if readyConfig.Profile != "ready" {
 		t.Fatalf("applied profile = %q", readyConfig.Profile)
+	}
+	if readyConfig.PublicGuard.DocumentationLocale != "ja" {
+		t.Fatalf("applied documentation locale = %q", readyConfig.PublicGuard.DocumentationLocale)
 	}
 	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
 	if err != nil {
@@ -340,7 +344,7 @@ func configuredFixture() projectconfig.Config {
 			GitHubOwner: "acme", GitHubRepository: "tool", Description: "A concise Acme command-line tool.",
 			FormulaClass: "Acme", LicenseSPDX: "MIT", SecurityContact: "security@acme.example",
 		},
-		PublicGuard: projectconfig.PublicGuard{DenylistFile: ".harness/denylist.txt"},
+		PublicGuard: projectconfig.PublicGuard{DocumentationLocale: "en", DenylistFile: ".harness/denylist.txt"},
 	}
 }
 

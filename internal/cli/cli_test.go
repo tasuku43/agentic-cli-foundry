@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tasuku43/agentic-cli-foundry/internal/domain/doctor"
 	"github.com/tasuku43/agentic-cli-foundry/internal/domain/fault"
@@ -180,12 +181,159 @@ func TestEmitChecksCancellationImmediatelyBeforeStdout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = withCommandPath(ctx, "version")
 	cancel()
-	if code := command.emit(ctx, []byte("must-not-be-written\n")); code != ExitCanceled {
+	if code := command.emitResult(ctx, []byte("must-not-be-written\n")); code != ExitCanceled {
 		t.Fatalf("emit() code = %d, stderr = %q", code, stderr.String())
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "code: operation_canceled") {
 		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
 	}
+}
+
+func TestEmitMutationResultPreservesConfirmedSuccessAfterCancellation(t *testing.T) {
+	command, stdout, stderr := newTestCLI(passingInspector("unused"))
+	command.catalog = NewCatalog(mutationOutputCommand())
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = withCommandPath(ctx, "items update")
+	cancel()
+
+	if code := command.emitResult(ctx, []byte("confirmed mutation result\n")); code != ExitOK {
+		t.Fatalf("emitMutationResult() code = %d, stderr = %q", code, stderr.String())
+	}
+	if got, want := stdout.String(), "confirmed mutation result\n"; got != want || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q, want %q; stderr = %q", got, want, stderr.String())
+	}
+}
+
+func TestEmitMutationResultStillRequiresCompleteWrite(t *testing.T) {
+	var stderr bytes.Buffer
+	command := New(strings.NewReader(""), shortWriter{}, &stderr)
+	command.catalog = NewCatalog(mutationOutputCommand())
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = withCommandPath(ctx, "items update")
+	cancel()
+
+	if code := command.emitResult(ctx, []byte("confirmed mutation result\n")); code != ExitInternal {
+		t.Fatalf("emitMutationResult() code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "code: mutation_output_write_failed") ||
+		!strings.Contains(stderr.String(), "retryable: false") ||
+		!strings.Contains(stderr.String(), "next_action: "+ProgramName+" sample list") ||
+		strings.Contains(stderr.String(), "code: operation_canceled") ||
+		strings.Contains(stderr.String(), "next_action: "+ProgramName+" items update") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestCatalogBoundMutationFinalizerCannotBeDowngradedByHandler(t *testing.T) {
+	var cancelInvocation context.CancelFunc
+	mutation := catalogBoundMutationCommand(func(ctx context.Context, c *CLI, command CommandSpec, _ operation.Intent, _ ParsedInputs) int {
+		// A handler-local copy is not authoritative. The finalizer resolves the
+		// actual effect from the catalog-bound command path.
+		command.Effect = operation.EffectRead
+		cancelInvocation()
+		return c.emitResult(ctx, []byte("confirmed mutation result\n"))
+	})
+	catalog := NewCatalog(discoverSpec("items list", "item"), mutation)
+	if err := catalog.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("late cancellation preserves confirmed output", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		command := newCLI(strings.NewReader(""), &stdout, &stderr, catalog, passingInspector("unused"))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancelInvocation = cancel
+		if code := command.RunContext(ctx, []string{"items", "update", "--id=-opaque-item"}); code != ExitOK {
+			t.Fatalf("RunContext() code = %d, stderr = %q", code, stderr.String())
+		}
+		if stdout.String() != "confirmed mutation result\n" || stderr.Len() != 0 {
+			t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("short write is normalized as non-retryable", func(t *testing.T) {
+		var stderr bytes.Buffer
+		command := newCLI(strings.NewReader(""), shortWriter{}, &stderr, catalog, passingInspector("unused"))
+		ctx, cancel := context.WithCancel(context.Background())
+		cancelInvocation = cancel
+		if code := command.RunContext(ctx, []string{"items", "update", "--id=-opaque-item"}); code != ExitInternal {
+			t.Fatalf("RunContext() code = %d, stderr = %q", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "code: mutation_output_write_failed") ||
+			!strings.Contains(stderr.String(), "retryable: false") ||
+			!strings.Contains(stderr.String(), "next_action: "+ProgramName+" items list") ||
+			strings.Contains(stderr.String(), "code: undeclared_fault_contract") {
+			t.Fatalf("stderr = %q", stderr.String())
+		}
+	})
+}
+
+func TestDispatchParsesCatalogInputsBeforeCallingHandler(t *testing.T) {
+	called := 0
+	spec := utilitySpec("probe")
+	spec.Args = "--count <count>"
+	spec.Agent.Inputs = []CommandInput{{
+		Name: "--count", Source: InputSourceFlag, Required: true,
+		ValueKind: InputValueInteger, Cardinality: InputCardinalitySingle,
+		Description: "Bounded probe count.", AllowedValues: []string{},
+	}}
+	spec.handler = func(_ context.Context, _ *CLI, _ CommandSpec, _ operation.Intent, inputs ParsedInputs) int {
+		called++
+		value, present := inputs.Integer("--count")
+		if !present || value != 2 || !inputs.Provided("--count") {
+			t.Fatalf("handler inputs = value %d, present %t, provided %t", value, present, inputs.Provided("--count"))
+		}
+		return ExitOK
+	}
+	commands := DefaultCatalog().Commands()
+	commands = append(commands, spec)
+	command := newCLI(strings.NewReader(""), io.Discard, io.Discard, NewCatalog(commands...), passingInspector("unused"))
+
+	if code := command.RunContext(context.Background(), []string{"probe", "--count", "invalid"}); code != ExitUsage {
+		t.Fatalf("invalid dispatch code = %d", code)
+	}
+	if called != 0 {
+		t.Fatalf("handler called %d times for invalid argv", called)
+	}
+	if code := command.RunContext(context.Background(), []string{"probe", "--count", "2"}); code != ExitOK {
+		t.Fatalf("valid dispatch code = %d", code)
+	}
+	if called != 1 {
+		t.Fatalf("handler called %d times after valid argv", called)
+	}
+}
+
+func mutationOutputCommand() CommandSpec {
+	return CommandSpec{
+		Path:   "items update",
+		Effect: operation.EffectWrite,
+		Agent: AgentContract{Errors: []CommandError{
+			declaredCommandError(
+				fault.KindInternal,
+				"mutation_output_write_failed",
+				false,
+				"sample list",
+				"Reconcile the confirmed mutation result without repeating the mutation.",
+			),
+		}},
+	}
+}
+
+func catalogBoundMutationCommand(handler commandHandler) CommandSpec {
+	spec := actSpec("items update", "item", "--id")
+	spec.Effect = operation.EffectWrite
+	spec.Summary = "Update one selected item"
+	spec.Agent.Outcome = "Update the selected item after policy approval"
+	spec.Agent.Errors = mutationErrors(spec.Agent.Errors, spec.Path)
+	spec.Agent.Mutation = &MutationContract{
+		TargetKind: "item", TargetInputs: []string{"--id"}, TargetIDInput: "--id",
+		Impact: operation.Impact{
+			Cardinality: operation.CardinalityOne, Notification: operation.DeclarationNo,
+			AccessChange: operation.DeclarationNo, Destructive: operation.DeclarationNo,
+		},
+	}
+	spec.handler = handler
+	return spec
 }
 
 func TestJSONErrorIsStableAndDoesNotExposePlainCause(t *testing.T) {
@@ -207,6 +355,109 @@ func TestJSONErrorIsStableAndDoesNotExposePlainCause(t *testing.T) {
 	if document.SchemaVersion != 1 || document.Error.Kind != "internal" || document.Error.Code != "internal_error" ||
 		document.Error.RetryAfter != nil || len(document.Error.NextActions) != 1 {
 		t.Fatalf("error document = %+v", document)
+	}
+}
+
+func TestRateLimitTimingPresentationDoesNotAuthorizeRetry(t *testing.T) {
+	unknown := renderTextError(errorPayload{
+		Kind:      fault.KindRateLimited,
+		Code:      "provider_rate_limited",
+		Message:   "The provider rate limit was reached.",
+		Retryable: true,
+	})
+	if !strings.Contains(string(unknown), "retry_after: unknown") {
+		t.Fatalf("rate-limit text timing = %q", unknown)
+	}
+	nonRateLimit := renderTextError(errorPayload{
+		Kind:      fault.KindUnavailable,
+		Code:      "provider_unavailable",
+		Message:   "The provider is unavailable.",
+		Retryable: true,
+	})
+	if !strings.Contains(string(nonRateLimit), "retry_after: none") {
+		t.Fatalf("non-rate-limit text timing = %q", nonRateLimit)
+	}
+
+	mutation := catalogBoundMutationCommand(func(ctx context.Context, c *CLI, _ CommandSpec, _ operation.Intent, _ ParsedInputs) int {
+		rateLimited := fault.New(
+			fault.KindRateLimited,
+			"mutation_rate_limited",
+			"The mutation was rate limited.",
+			false,
+		)
+		rateLimited.RetryAfter = 10 * time.Second
+		return c.fail(ctx, rateLimited)
+	})
+	mutation.Agent.Errors = append(mutation.Agent.Errors, declaredCommandError(
+		fault.KindRateLimited,
+		"mutation_rate_limited",
+		false,
+		"items list",
+		"Wait for the provider window and reconcile before another mutation.",
+	))
+	mutationCatalog := NewCatalog(discoverSpec("items list", "item"), mutation)
+	if err := mutationCatalog.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	command := newCLI(strings.NewReader(""), &stdout, &stderr, mutationCatalog, passingInspector("unused"))
+	if code := command.RunContext(context.Background(), []string{"--error-format=json", "items", "update", "--id", "item-1"}); code != ExitRateLimited {
+		t.Fatalf("RunContext() code = %d, stderr = %q", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	var document errorDocument
+	if err := json.Unmarshal(stderr.Bytes(), &document); err != nil {
+		t.Fatalf("JSON error = %v, output = %q", err, stderr.String())
+	}
+	if document.Error.Retryable || document.Error.RetryAfter == nil || *document.Error.RetryAfter != "10s" {
+		t.Fatalf("non-retryable rate-limit error = %+v", document.Error)
+	}
+
+	read := utilitySpec("provider inspect")
+	read.Agent.Errors = append(read.Agent.Errors, declaredCommandError(
+		fault.KindRateLimited,
+		"provider_rate_limited",
+		true,
+		read.Path,
+		"Retry only when a new provider window is available.",
+	))
+	read.handler = func(ctx context.Context, c *CLI, _ CommandSpec, _ operation.Intent, _ ParsedInputs) int {
+		return c.fail(ctx, fault.New(
+			fault.KindRateLimited,
+			"provider_rate_limited",
+			"The provider rate limit was reached.",
+			true,
+		))
+	}
+	readCatalog := NewCatalog(read)
+	if err := readCatalog.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	command = newCLI(strings.NewReader(""), &stdout, &stderr, readCatalog, passingInspector("unused"))
+	if code := command.RunContext(context.Background(), []string{"--error-format=json", "provider", "inspect"}); code != ExitRateLimited {
+		t.Fatalf("RunContext() unknown timing code = %d, stderr = %q", code, stderr.String())
+	}
+	var unknownDocument errorDocument
+	if err := json.Unmarshal(stderr.Bytes(), &unknownDocument); err != nil {
+		t.Fatalf("unknown timing JSON error = %v, output = %q", err, stderr.String())
+	}
+	if unknownDocument.Error.Kind != fault.KindRateLimited ||
+		!unknownDocument.Error.Retryable || unknownDocument.Error.RetryAfter != nil {
+		t.Fatalf("unknown rate-limit error = %+v", unknownDocument.Error)
+	}
+	var rawDocument struct {
+		Error map[string]json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &rawDocument); err != nil {
+		t.Fatalf("raw JSON error = %v, output = %q", err, stderr.String())
+	}
+	retryAfter, present := rawDocument.Error["retry_after"]
+	if !present || string(retryAfter) != "null" {
+		t.Fatalf("unknown rate-limit retry_after = present %t, value %s", present, retryAfter)
 	}
 }
 
@@ -270,7 +521,7 @@ func TestRuntimeFaultMustMatchCatalogAndUsesCatalogRecovery(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			spec := utilitySpec("test")
-			spec.handler = func(ctx context.Context, c *CLI, _ CommandSpec, _ operation.Intent, _ []string) int {
+			spec.handler = func(ctx context.Context, c *CLI, _ CommandSpec, _ operation.Intent, _ ParsedInputs) int {
 				return c.fail(ctx, test.runtime)
 			}
 			var stdout, stderr bytes.Buffer

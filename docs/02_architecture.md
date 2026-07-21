@@ -84,6 +84,13 @@ collection member, a display name, physical order, proximity, quotation, or
 indentation. A relationship-rich capability keeps a presentation-independent
 typed fixture and answer key so the same facts can validate every renderer.
 
+`CommandInput` is executable invocation metadata rather than help-only prose.
+It declares text/integer/boolean value kind, single/repeatable cardinality,
+required state, an optional omission default, applicable integer bounds, and
+explicit `requires`/`conflicts_with` relations. One catalog-owned parser applies
+those facts to argv and retains explicit/defaulted/absent state; task handlers
+then perform domain-specific validation such as opaque-reference shape.
+
 `cmd/agentic-cli-foundry/main.go` is a thin executable entry point. It should not contain product logic or construct adapters independently of the CLI composition root.
 
 Production Go packages stay within `cmd/` and the four `internal/` layers. The `cmd/` entrypoint imports only context, operating-system signal handling, and `internal/cli`; process execution, network, filesystem, and third-party dependencies belong behind infrastructure ports. Repository-only programs live under `tools/` and cannot be imported by production packages.
@@ -108,7 +115,10 @@ At minimum, catalog validation rejects:
 - argv input metadata whose `Required` value or ordered `AllowedValues` disagree
   with the small bracket, `a|b`, and exact `--flag=literal` usage grammar;
   non-argv sources are excluded from this syntax check;
-- missing or inconsistent common runtime failures (`operation_canceled`, output `output_write_failed`, standard authentication-gate failures, and standard mutation-invoker contract/policy/unknown-outcome failures), or an unknown-outcome recovery that points to another mutation;
+- missing or invalid input value kind/cardinality, invalid defaults or numeric
+  bounds, unenforceable dependency/conflict relations, duplicate scalar input,
+  and a positional input after a repeatable positional input;
+- missing or inconsistent common runtime failures (`operation_canceled`, read-output `output_write_failed`, mutation-output `mutation_output_write_failed`, standard authentication-gate failures, and standard mutation-invoker contract/policy/unknown-outcome failures), or an uncertain/confirmed-mutation-output recovery that points to another mutation;
 - recovery commands that are only catalog prefixes, contain unchecked argv, use an unknown help selector, or otherwise fall outside the exact-path/`help <path-or-namespace>` grammar;
 - read commands with mutation metadata; incomplete reference-bound create/write roles; incomplete, mixed, or mismatched fixed-target mutation binding; unbound or extra target inputs; and mutations without complete impact;
 - a root agent-index entry larger than 512 encoded bytes, which would let selection prose crowd detailed scoped contracts as the catalog grows;
@@ -116,7 +126,7 @@ At minimum, catalog validation rejects:
 
 ## Command roles and opaque reference flow
 
-Actions use exactly one target-binding mode. `AgentContract.FixedTarget` is the command-bound declaration: stable kind, ID, description, and the only supported scope `tool_local`. Only `RoleAct` may declare it, and a fixed-target command has no produced or consumed reference edge. External, ambiguous, or caller-selected targets remain reference-bound. Scoped agent-help schema version 5 publishes the optional fixed target while the compact root index shape remains unchanged.
+Actions use exactly one target-binding mode. `AgentContract.FixedTarget` is the command-bound declaration: stable kind, ID, description, and the only supported scope `tool_local`. Only `RoleAct` may declare it, and a fixed-target command has no produced or consumed reference edge. External, ambiguous, or caller-selected targets remain reference-bound. Scoped agent-help schema version 6 publishes the optional fixed target and the executable typed input contract while the compact root index shape remains unchanged.
 
 `CommandRole` describes where a task sits in a user workflow:
 
@@ -135,7 +145,7 @@ the kind required by its semantic field. Supplying a structurally valid value
 of another kind is reference-kind laundering and fails before presentation or
 action composition.
 
-Agent-help schema version 5 separates selection from invocation detail. Root `help --format agent` is an `index` view containing only each command's path, top-level namespace, summary, capability ID, outcome, effect, and role. Each encoded command entry has a 512-byte catalog budget. Its `scope_request` names `commands[].path` and `commands[].namespace` as selectors and supplies the exact invocation template. `help <selector> --format agent` is a `scope` view containing global I/O/error contracts, complete selected `AgentContract` values (including an optional fixed target), and reference workflows touching the selection. Each workflow groups one `reference_kind` with unique `producers[]` and `consumers[]`; the shared-kind interchangeability contract supplies the implicit producer-to-consumer edges without encoding their Cartesian product. A scoped selection returns the complete group whenever any member touches the selection, so exact next usage, field, and input facts are not lost. Redundant command-local reference next actions are omitted, while fault recovery remains in `contract.errors[].next_actions`. The I/O contract marks external text as untrusted data, declares visible structural projection, and distinguishes validated exact opaque references.
+Agent-help schema version 6 separates selection from invocation detail. Root `help --format agent` is an `index` view containing only each command's path, top-level namespace, summary, capability ID, outcome, effect, and role. Each encoded command entry has a 512-byte catalog budget. Its `scope_request` names `commands[].path` and `commands[].namespace` as selectors and supplies the exact invocation template. `help <selector> --format agent` is a `scope` view containing the executable value-flag, boolean, equals-only dash-value, and positional-only grammar; global I/O/error contracts; complete selected `AgentContract` values (including executable typed inputs and an optional fixed target); and reference workflows touching the selection. Each workflow groups one `reference_kind` with unique `producers[]` and `consumers[]`; the shared-kind interchangeability contract supplies the implicit producer-to-consumer edges without encoding their Cartesian product. A scoped selection returns the complete group whenever any member touches the selection, so exact next usage, field, and input facts are not lost. Redundant command-local reference next actions are omitted, while fault recovery remains in `contract.errors[].next_actions`. The I/O contract marks external text as untrusted data, declares visible structural projection, and distinguishes validated exact opaque references.
 
 The `scope_request` counters bound only help discovery and retrieval of one
 selected command or namespace contract. An unknown outcome needs the root index
@@ -197,7 +207,8 @@ Do not infer effect from an HTTP method, command name, or adapter function. A `P
 ```text
 argv
   -> CLI selects one CommandSpec from Catalog
-  -> CLI validates role/reference declarations, parses task input, and chooses presentation
+  -> CLI validates role/reference/input declarations and parses argv through the catalog-owned parser
+  -> handler receives validated values with explicit/defaulted/absent state and chooses presentation
   -> application use case interprets the user outcome
   -> domain validates Effect, Intent, TargetRef, Impact, auth, and API envelopes
   -> controlled execution boundary snapshots intent and applies derived policy
@@ -215,7 +226,15 @@ For mutations, validation failure must occur before the external side effect. `a
 - Infrastructure errors map unstable upstream details into a stable `fault.Error` without leaking secrets.
 - CLI maps fault kind, code, retryability, retry-after, and next actions to stable human and machine presentation and exit statuses.
 
-The stable exit mapping is `0` success; `2` invalid input; `3` internal; `4` authentication; `5` permission; `6` not found; `7` ambiguous; `8` rate limited; `9` unavailable; `10` rejected; `11` canceled; `12` unsupported; and `13` contract violation. Success output is written to stdout, while text or schema-versioned JSON failures are written to stderr. A zero status requires a complete successful write. A failing `doctor` report may be rendered in full before its structured `rejected` failure so callers receive evidence without treating an incomplete result as success.
+`retryable` answers whether repeating the same logical command is permitted.
+`retry_after` is independent provider evidence about a wait window. A
+rate-limited mutation may therefore be non-retryable while still publishing a
+positive wait duration for reconciliation or a different operation; the timing
+must never be interpreted as replay authorization. Text output renders an
+unknown rate-limit window as `unknown`, while JSON retains the stable nullable
+field.
+
+The stable exit mapping is `0` success; `2` invalid input; `3` internal; `4` authentication; `5` permission; `6` not found; `7` ambiguous; `8` rate limited; `9` unavailable; `10` rejected; `11` canceled; `12` unsupported; and `13` contract violation. Success output is written to stdout, while text or schema-versioned JSON failures are written to stderr. A zero status requires a complete successful write. One effect-aware finalizer checks cancellation immediately before a read write, but preserves confirmed create/write success across later cancellation. A short or failed mutation-result write returns non-retryable `mutation_output_write_failed` with read-only reconciliation rather than suggesting the mutation itself is safe to repeat. A failing `doctor` report may be rendered in full before its structured `rejected` failure so callers receive evidence without treating an incomplete result as success.
 
 Do not render inside domain, application, or infrastructure packages. Do not make a use case parse human-facing error strings from an adapter.
 

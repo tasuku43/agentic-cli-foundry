@@ -62,6 +62,102 @@ func TestCheckTextDetectsPublicLeaksAndUnsafeSecrets(t *testing.T) {
 	}
 }
 
+func TestCheckTextAppliesTheConfiguredDocumentationLocale(t *testing.T) {
+	english := projectconfig.Config{PublicGuard: projectconfig.PublicGuard{DocumentationLocale: "en"}}
+	issues := checkText("README.md", "日本語の説明", english, nil, "public")
+	if len(issues) != 1 || !strings.Contains(issues[0].Message, "documentation_locale") {
+		t.Fatalf("English locale issues = %#v", issues)
+	}
+	englishThreeLetter := projectconfig.Config{PublicGuard: projectconfig.PublicGuard{DocumentationLocale: "eng"}}
+	if issues := checkText("README.md", "日本語の説明", englishThreeLetter, nil, "public"); len(issues) != 1 {
+		t.Fatalf("three-letter English locale issues = %#v", issues)
+	}
+
+	japanese := projectconfig.Config{PublicGuard: projectconfig.PublicGuard{DocumentationLocale: "ja"}}
+	if issues := checkText("README.md", "日本語の説明", japanese, nil, "public"); len(issues) != 0 {
+		t.Fatalf("Japanese locale issues = %#v", issues)
+	}
+	if issues := checkText("fixture.json", "日本語の外部データ", english, nil, "public"); len(issues) != 0 {
+		t.Fatalf("non-Markdown external data was treated as documentation prose: %#v", issues)
+	}
+	for path, text := range map[string]string{
+		"README.md":        "```json\n{\"provider_text\":\"日本語\"}\n```",
+		"docs/provider.md": "> 日本語の引用データ",
+	} {
+		if issues := checkText(path, text, english, nil, "public"); len(issues) != 0 {
+			t.Fatalf("external text %q was treated as trusted prose: %#v", path, issues)
+		}
+	}
+	if issues := checkText("docs/work/active/context.md", "日本語の作業中説明", english, nil, "public"); len(issues) != 1 {
+		t.Fatalf("active work prose issues = %#v", issues)
+	}
+	if issues := checkTextWithLocaleExemption("docs/work/complete/context.md", "日本語の歴史的証拠", english, nil, "public", true); len(issues) != 0 {
+		t.Fatalf("historical work evidence was treated as trusted prose: %#v", issues)
+	}
+	for _, text := range []string{
+		"Use `日本語の識別子` exactly.",
+		"Use ``multi-line\n日本語の識別子`` exactly.",
+		"See [English label](https://example.com/日本語).",
+		"See [English label](https://example.com/a(日本語)).",
+		"[reference]: docs/日本語.md",
+	} {
+		if issues := checkText("README.md", text, english, nil, "public"); len(issues) != 0 {
+			projected, visible := projectDocumentationLocale(strings.Split(text, "\n"))
+			t.Fatalf("non-prose Markdown %q issues = %#v; projected = %q, visible = %v", text, issues, projected, visible)
+		}
+	}
+	for _, text := range []string{
+		"Use `unclosed 日本語 prose.",
+		"See [日本語のラベル](https://example.com/reference).",
+		`See \[label](日本語の説明).`,
+		`\[reference]: 日本語の説明`,
+		`See [English label](https://example.com/reference "日本語のタイトル").`,
+	} {
+		if issues := checkText("README.md", text, english, nil, "public"); len(issues) != 1 {
+			t.Fatalf("trusted Markdown prose %q issues = %#v", text, issues)
+		}
+	}
+	issues = checkText("README.md", "trusted prose\n\n日本語の説明\n", english, nil, "public")
+	if len(issues) != 1 || issues[0].Line != 3 {
+		t.Fatalf("trusted prose issues = %#v", issues)
+	}
+}
+
+func TestHistoricalWorkPacketLocaleExemptionsFollowTerminalStatus(t *testing.T) {
+	root := t.TempDir()
+	paths := []string{
+		"docs/work/active/context.md",
+		"docs/work/active/goal.md",
+		"docs/work/complete/context.md",
+		"docs/work/complete/goal.md",
+		"docs/work/draft/goal.md",
+		"docs/work/malformed/goal.md",
+		"docs/work/superseded/goal.md",
+	}
+	writeRepositoryFixture(t, root, "docs/work/active/goal.md", workGoal("Active", "", "- [ ] In progress\n"))
+	writeRepositoryFixture(t, root, "docs/work/active/context.md", "日本語\n")
+	writeRepositoryFixture(t, root, "docs/work/complete/goal.md", workGoal("Complete", "", "- [x] Done\n"))
+	writeRepositoryFixture(t, root, "docs/work/complete/context.md", "日本語\n")
+	writeRepositoryFixture(t, root, "docs/work/draft/goal.md", workGoal("Draft", "", "- [ ] Pending\n"))
+	writeRepositoryFixture(t, root, "docs/work/malformed/goal.md", "# Missing metadata\n")
+	writeRepositoryFixture(t, root, "docs/work/superseded/goal.md", workGoal("Superseded", "../active/goal.md", "- [x] Historical\n"))
+
+	exemptions, err := historicalWorkPacketLocaleExemptions(root, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"docs/work/complete/context.md", "docs/work/superseded/goal.md"} {
+		if !workPacketLocaleExempt(path, exemptions) {
+			t.Errorf("%s did not receive its historical exemption", path)
+		}
+	}
+	for _, path := range []string{"docs/work/active/context.md", "docs/work/draft/goal.md", "docs/work/malformed/goal.md", "README.md"} {
+		if workPacketLocaleExempt(path, exemptions) {
+			t.Errorf("%s received a locale exemption", path)
+		}
+	}
+}
+
 func TestCheckTextDetectsQuotedJSONSecretsAndMarkerSubstrings(t *testing.T) {
 	config := projectconfig.Config{Profile: "template"}
 	unsafe := jsonSecretAssignment("client_"+"secret", "prod-contest-value")

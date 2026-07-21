@@ -39,7 +39,7 @@ The default public output and exit contract is:
 | `doctor` | Complete delivery with exhaustive coverage of the declared checks: TSV headed `CHECK<TAB>STATUS<TAB>DETAIL`, or JSON schema version 1 under `report`; status is `pass`, `warn`, or `fail` |
 | sample list | Complete delivery with exhaustive coverage of the synthetic repository: TSV headed `id<TAB>name`, or JSON schema version 1 under `items`; every emitted ID is an unchanged reusable reference |
 | sample read | Complete delivery with collection coverage `not_applicable`: TSV headed `id<TAB>name<TAB>content`, or JSON schema version 1 under `item` |
-| agent help | JSON schema version 5 with complete delivery and exhaustive coverage of the selected catalog scope: root `view: index` returns path/namespace/summary/capability/outcome/effect/role entries plus a machine-readable scope request; selected `view: scope` returns global I/O/error rules, complete command contracts (including an optional fixed target), and reference-kind workflows grouped into unique producer and consumer sets |
+| agent help | JSON schema version 6 with complete delivery and exhaustive coverage of the selected catalog scope: root `view: index` returns path/namespace/summary/capability/outcome/effect/role entries plus a machine-readable scope request; selected `view: scope` returns global I/O/error rules, executable typed input contracts, complete command contracts (including an optional fixed target), and reference-kind workflows grouped into unique producer and consumer sets |
 | structured failure | JSON schema version 1 on stderr under `error`, selected by placing `--error-format json` before the command; text is the default |
 | version | Complete delivery with collection coverage `not_applicable`: `agentic-cli-foundry <version> (<commit>)` when commit metadata is available |
 | exit `0` | Successful command |
@@ -52,6 +52,13 @@ The default public output and exit contract is:
 | exit `12` / `13` | Unsupported task / violated declared contract |
 
 Successful results are written to stdout; failures are written to stderr. A zero exit status requires a complete successful write, and a partial result is never reported as success. A failed diagnostic may emit its complete report before returning its structured nonzero failure so the caller receives the evidence needed to recover.
+
+Read results recheck cancellation immediately before their complete write. A
+mutation result returned after the controlled action has confirmed success uses
+the effect-aware complete-write path: later cancellation cannot reclassify that
+success as a retryable failure. A writer failure still prevents exit 0, but is
+the non-retryable `mutation_output_write_failed` fault with a read-only
+reconciliation action rather than permission to repeat the mutation.
 
 Delivery and collection coverage are independent public facts. Complete
 delivery means the task-selected result was fully written or no success was
@@ -70,6 +77,9 @@ traversal completes.
 - an explicit `operation.Effect`;
 - a `CommandRole` of utility, discover, or act;
 - structured inputs and output fields from which opaque-reference edges are derived;
+- each input's executable value kind, single or repeatable cardinality,
+  required/optional state, omission default, applicable numeric bounds, and
+  explicit dependency/conflict relations;
 - a stable capability ID, output formats/types, delivery, collection coverage,
   prerequisites, declared failures, and exact recovery commands;
 - a default output format and, when JSON is supported, a stable envelope and positive schema version;
@@ -79,9 +89,26 @@ traversal completes.
 
 No command path may also be another command's word-boundary namespace prefix: `foo` and `foo bar` cannot coexist because exact selection would hide the namespace children. Within the template's intentionally small usage grammar, brackets define optional argv inputs, non-bracketed inputs are required, a written `a|b` enumeration must match several `AllowedValues` exactly and in order, and `--flag=literal` binds one exact allowed value. Stdin, environment, and configuration inputs remain outside argv syntax matching.
 
-Every command declares the common runtime failures that its shared execution path can emit. `operation_canceled` is always present with its stable kind/retryability; commands with output also declare `output_write_failed`. A non-nil authentication requirement binds a command to the template `app/authn.Gate`, so the catalog additionally requires every standard gate fault with its exact kind and retryability; provider-specific faults remain explicit additions. Mutations similarly publish the standard invoker's contract and policy-rejection failures, including non-retryable `unclassified_mutation_outcome` with a read-only reconciliation action, so runtime normalization does not turn a predictable failure into `undeclared_fault_contract` or an unsafe retry.
+Every command declares the common runtime failures that its shared execution path can emit. `operation_canceled` is always present with its stable kind/retryability. Read commands with output declare retryable `output_write_failed`; create/write commands with output instead declare non-retryable `mutation_output_write_failed` with read-only reconciliation. A non-nil authentication requirement binds a command to the template `app/authn.Gate`, so the catalog additionally requires every standard gate fault with its exact kind and retryability; provider-specific faults remain explicit additions. Mutations similarly publish the standard invoker's contract and policy-rejection failures, including non-retryable `unclassified_mutation_outcome` with a read-only reconciliation action, so runtime normalization does not turn a predictable failure into `undeclared_fault_contract` or an unsafe retry.
 
 `next_actions[].command` uses a deliberately small executable grammar: an exact catalog command path, or `help` followed by one exact path or canonical namespace. Prefix-only matches, unknown help selectors, non-canonical whitespace, and unchecked argv suffixes fail catalog validation. A derived project that needs fixed arguments in recovery must first add a typed argument contract and parser-aware validation; it must not append plausible-looking prose to the command string.
+
+The catalog-owned parser enforces command-line input declarations and preserves
+three states independently: absent with no value, omitted with a declared
+default, and explicitly supplied (including empty, zero, or false). Handlers
+perform only task-specific conversion and domain validation; they do not
+redeclare flag type, repetition, range, default, or input relations. Value flags
+accept `--flag value` or `--flag=value`, but a dash-prefixed value requires the
+unambiguous equals form. Boolean flags accept the bare true form and explicit
+`=true` or `=false`. The `--` marker begins positional-only input so an opaque
+dash-prefixed positional value can pass unchanged.
+
+Human help and machine help are distinct catalog projections. Human root help
+lists direct commands and each namespace once, namespace help lists relative
+leaves, and exact help prints the full executable input contract plus that argv
+grammar. Scoped agent help publishes the same grammar structurally. Natural
+`<namespace> --help` and `<exact-command> --help` forms resolve to the same
+canonical help selector. The machine root remains an exact-path outcome index.
 
 The agent-help, success-output, and error-output schemas are versioned
 independently from prose help. A derived project must increment or deliberately
@@ -99,7 +126,7 @@ objects and their command entries, rejecting missing and extra keys. A second
 command that needs input-selected result shapes is evidence to add catalog-owned
 variant metadata before exposing it, not to add another undocumented exception.
 
-In scoped agent-help schema 5, one workflow record names a reference kind and
+In scoped agent-help schema 6, one workflow record names a reference kind and
 lists its unique producers and consumers. Sharing a kind already declares every
 producer value interchangeable at every listed consumer, so the document does
 not repeat their Cartesian product or duplicate it as command-local next
@@ -176,6 +203,26 @@ scope even when empty. Presentation may omit only facts that its reviewed
 output contract declares redundant; it must not recover scope from the first
 item, strengthen an unresolved fact, or infer relationships from names,
 ordering, proximity, quoting, or indentation.
+
+Provider collection coverage and provider visibility are different facts. A
+task may fully deliver its declared bounded window while the provider reports
+that some objects inside that window are inaccessible or hidden. That
+limitation is a task-owned typed state, not an empty collection or a weaker
+coverage guess. Likewise, if a core record is valid but optional semantic
+enrichment cannot be established, the core may remain successful while the
+entire affected enrichment relation is typed unknown; mandatory identity,
+encoding, and bound failures still fail the result.
+
+### Keep locale policy at the trust boundary
+
+`public_guard.documentation_locale` selects the one default language for
+trusted repository and CLI-authored prose. The template uses English. Changing
+it is a product/thesis decision, not a translation-only edit. Command paths,
+flags, environment variables, fault codes, JSON keys, schema values, and
+reference kinds remain stable language-neutral identifiers. Provider and file
+text remains untranslated untrusted data; translation does not sanitize it.
+Historical evidence is not rewritten merely to make its prose match a new
+default locale.
 
 ### Bound raw flexibility
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -22,7 +24,7 @@ const (
 	maxAgentIndexEntryBytes = 512
 )
 
-type commandHandler func(context.Context, *CLI, CommandSpec, operation.Intent, []string) int
+type commandHandler func(context.Context, *CLI, CommandSpec, operation.Intent, ParsedInputs) int
 
 type catalogFaultSignature struct {
 	command   string
@@ -115,15 +117,66 @@ func (s InputSource) validate() error {
 	}
 }
 
-// CommandInput is one machine-readable input contract. ReferenceKind is empty
-// only when the input is not an opaque reference.
+// InputValueKind identifies the value grammar enforced by the catalog-owned
+// command-line parser. The zero value is invalid so a new input cannot silently
+// fall back to unbounded text.
+type InputValueKind string
+
+const (
+	InputValueUnknown InputValueKind = ""
+	InputValueText    InputValueKind = "text"
+	InputValueInteger InputValueKind = "integer"
+	InputValueBoolean InputValueKind = "boolean"
+)
+
+func (k InputValueKind) validate() error {
+	switch k {
+	case InputValueText, InputValueInteger, InputValueBoolean:
+		return nil
+	default:
+		return fmt.Errorf("input value kind is missing or invalid: %q", k)
+	}
+}
+
+// InputCardinality states whether one input name may contribute one value or
+// several. Required independently distinguishes zero-or-one from exactly-one,
+// and zero-or-more from one-or-more.
+type InputCardinality string
+
+const (
+	InputCardinalityUnknown    InputCardinality = ""
+	InputCardinalitySingle     InputCardinality = "single"
+	InputCardinalityRepeatable InputCardinality = "repeatable"
+)
+
+func (c InputCardinality) validate() error {
+	switch c {
+	case InputCardinalitySingle, InputCardinalityRepeatable:
+		return nil
+	default:
+		return fmt.Errorf("input cardinality is missing or invalid: %q", c)
+	}
+}
+
+// CommandInput is one executable machine-readable input contract.
+// DefaultValue is nil when omission has no catalog-owned default. Minimum and
+// Maximum apply only to integer values. Requires and ConflictsWith are checked
+// against explicitly supplied command-line inputs. ReferenceKind is empty only
+// when the input is not an opaque reference.
 type CommandInput struct {
-	Name          string      `json:"name"`
-	Source        InputSource `json:"source"`
-	Required      bool        `json:"required"`
-	Description   string      `json:"description"`
-	AllowedValues []string    `json:"allowed_values"`
-	ReferenceKind string      `json:"reference_kind,omitempty"`
+	Name          string           `json:"name"`
+	Source        InputSource      `json:"source"`
+	Required      bool             `json:"required"`
+	ValueKind     InputValueKind   `json:"value_kind"`
+	Cardinality   InputCardinality `json:"cardinality"`
+	Description   string           `json:"description"`
+	AllowedValues []string         `json:"allowed_values"`
+	DefaultValue  *string          `json:"default_value,omitempty"`
+	Minimum       *int64           `json:"minimum,omitempty"`
+	Maximum       *int64           `json:"maximum,omitempty"`
+	Requires      []string         `json:"requires,omitempty"`
+	ConflictsWith []string         `json:"conflicts_with,omitempty"`
+	ReferenceKind string           `json:"reference_kind,omitempty"`
 }
 
 // OutputFormat identifies one stable presentation supported by a command.
@@ -360,6 +413,10 @@ func declaredCommandError(kind fault.Kind, code string, retryable bool, command,
 	}
 }
 
+func stringPointer(value string) *string {
+	return &value
+}
+
 // DefaultCatalog returns the public CLI contract.
 func DefaultCatalog() Catalog {
 	return NewCatalog(
@@ -373,7 +430,12 @@ func DefaultCatalog() Catalog {
 				CapabilityID: "system.diagnostics",
 				Outcome:      "Inspect the local runtime and receive a validated diagnostic report",
 				Inputs: []CommandInput{
-					{Name: "--format", Source: InputSourceFlag, Required: false, Description: "Select the complete report representation.", AllowedValues: []string{"tsv", "json"}},
+					{
+						Name: "--format", Source: InputSourceFlag, Required: false,
+						ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
+						Description: "Select the complete report representation.", AllowedValues: []string{"tsv", "json"},
+						DefaultValue: stringPointer("tsv"),
+					},
 				},
 				Output: CommandOutput{
 					Formats:       []OutputFormat{OutputFormatTSV, OutputFormatJSON},
@@ -411,8 +473,17 @@ func DefaultCatalog() Catalog {
 				CapabilityID: "cli.discovery",
 				Outcome:      "Discover command usage, contracts, workflows, and next actions without external I/O",
 				Inputs: []CommandInput{
-					{Name: "command", Source: InputSourceArgument, Required: false, Description: "Select an exact command path or canonical command namespace.", AllowedValues: []string{}},
-					{Name: "--format", Source: InputSourceFlag, Required: false, Description: "Select human text or the machine-readable agent contract.", AllowedValues: []string{"text", "agent"}},
+					{
+						Name: "command", Source: InputSourceArgument, Required: false,
+						ValueKind: InputValueText, Cardinality: InputCardinalityRepeatable,
+						Description: "Select an exact command path or canonical command namespace as one or more path words.", AllowedValues: []string{},
+					},
+					{
+						Name: "--format", Source: InputSourceFlag, Required: false,
+						ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
+						Description: "Select human text or the machine-readable agent contract.", AllowedValues: []string{"text", "agent"},
+						DefaultValue: stringPointer("text"),
+					},
 				},
 				Output: CommandOutput{
 					Formats:       []OutputFormat{OutputFormatText, OutputFormatJSON},
@@ -429,7 +500,7 @@ func DefaultCatalog() Catalog {
 					Delivery:           OutputDeliveryComplete,
 					CollectionCoverage: CollectionCoverageExhaustive,
 					JSONEnvelope:       "commands",
-					JSONSchemaVersion:  5,
+					JSONSchemaVersion:  6,
 				},
 				Prerequisites: []string{},
 				Errors: []CommandError{
@@ -451,7 +522,12 @@ func DefaultCatalog() Catalog {
 				CapabilityID: "sample.inspect",
 				Outcome:      "Discover every offline sample and its stable opaque reference",
 				Inputs: []CommandInput{
-					{Name: "--format", Source: InputSourceFlag, Required: false, Description: "Select the complete sample collection representation.", AllowedValues: []string{"tsv", "json"}},
+					{
+						Name: "--format", Source: InputSourceFlag, Required: false,
+						ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
+						Description: "Select the complete sample collection representation.", AllowedValues: []string{"tsv", "json"},
+						DefaultValue: stringPointer("tsv"),
+					},
 				},
 				Output: CommandOutput{
 					Formats:       []OutputFormat{OutputFormatTSV, OutputFormatJSON},
@@ -492,8 +568,17 @@ func DefaultCatalog() Catalog {
 				CapabilityID: "sample.inspect",
 				Outcome:      "Read one uniquely identified offline sample without rediscovery",
 				Inputs: []CommandInput{
-					{Name: "--id", Source: InputSourceFlag, Required: true, Description: "Pass an id from sample list byte-for-byte without parsing or transformation.", AllowedValues: []string{}, ReferenceKind: "sample"},
-					{Name: "--format", Source: InputSourceFlag, Required: false, Description: "Select the single sample representation.", AllowedValues: []string{"tsv", "json"}},
+					{
+						Name: "--id", Source: InputSourceFlag, Required: true,
+						ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
+						Description: "Pass an id from sample list byte-for-byte without parsing or transformation.", AllowedValues: []string{}, ReferenceKind: "sample",
+					},
+					{
+						Name: "--format", Source: InputSourceFlag, Required: false,
+						ValueKind: InputValueText, Cardinality: InputCardinalitySingle,
+						Description: "Select the single sample representation.", AllowedValues: []string{"tsv", "json"},
+						DefaultValue: stringPointer("tsv"),
+					},
 				},
 				Output: CommandOutput{
 					Formats:       []OutputFormat{OutputFormatTSV, OutputFormatJSON},
@@ -665,7 +750,10 @@ func (c Catalog) Validate() error {
 				if err != nil {
 					return fmt.Errorf("catalog command %q error %q: %w", command.Path, declaredError.Code, err)
 				}
-				if declaredError.Code == "unclassified_mutation_outcome" && nextCommand.Effect != operation.EffectRead {
+				requiresReadOnlyRecovery := declaredError.Code == "unclassified_mutation_outcome" ||
+					declaredError.Code == "mutation_output_write_failed" ||
+					(command.Effect != operation.EffectRead && declaredError.Kind == fault.KindRateLimited && !declaredError.Retryable)
+				if requiresReadOnlyRecovery && nextCommand.Effect != operation.EffectRead {
 					return fmt.Errorf("catalog command %q error %q must point to a read-only reconciliation command", command.Path, declaredError.Code)
 				}
 			}
@@ -730,8 +818,15 @@ func validateAgentContract(command CommandSpec) error {
 	seenInputs := make(map[string]struct{}, len(contract.Inputs))
 	inputsByName := make(map[string]CommandInput, len(contract.Inputs))
 	commandLineInputs := make(map[string]struct{})
+	repeatableArgumentSeen := false
 	for index, input := range contract.Inputs {
 		if err := input.Source.validate(); err != nil {
+			return fmt.Errorf("agent input %d: %w", index, err)
+		}
+		if err := input.ValueKind.validate(); err != nil {
+			return fmt.Errorf("agent input %d: %w", index, err)
+		}
+		if err := input.Cardinality.validate(); err != nil {
 			return fmt.Errorf("agent input %d: %w", index, err)
 		}
 		if err := validateInputName(input); err != nil {
@@ -748,10 +843,53 @@ func validateAgentContract(command CommandSpec) error {
 			if err := validateContractText("input allowed value", value); err != nil {
 				return fmt.Errorf("agent input %q: %w", input.Name, err)
 			}
+			if err := validateStableInputLiteral(value); err != nil {
+				return fmt.Errorf("agent input %q allowed value: %w", input.Name, err)
+			}
 			if _, exists := seenValues[value]; exists {
 				return fmt.Errorf("agent input %q allowed value %q is declared more than once", input.Name, value)
 			}
 			seenValues[value] = struct{}{}
+		}
+		if input.Required && input.DefaultValue != nil {
+			return fmt.Errorf("agent input %q cannot be required and declare a default", input.Name)
+		}
+		if input.Cardinality == InputCardinalityRepeatable && input.DefaultValue != nil {
+			return fmt.Errorf("agent repeatable input %q cannot declare one scalar default", input.Name)
+		}
+		if input.Source != InputSourceArgument && input.Source != InputSourceFlag && input.Cardinality != InputCardinalitySingle {
+			return fmt.Errorf("agent non-command-line input %q must use single cardinality", input.Name)
+		}
+		if input.ValueKind == InputValueBoolean && input.Cardinality == InputCardinalityRepeatable {
+			return fmt.Errorf("agent boolean input %q cannot be repeatable", input.Name)
+		}
+		if input.Source == InputSourceArgument {
+			if repeatableArgumentSeen {
+				return fmt.Errorf("agent argument input %q follows a repeatable positional input", input.Name)
+			}
+			repeatableArgumentSeen = input.Cardinality == InputCardinalityRepeatable
+		}
+		if input.ValueKind != InputValueInteger && (input.Minimum != nil || input.Maximum != nil) {
+			return fmt.Errorf("agent non-integer input %q cannot declare numeric bounds", input.Name)
+		}
+		if input.Minimum != nil && input.Maximum != nil && *input.Minimum > *input.Maximum {
+			return fmt.Errorf("agent integer input %q minimum exceeds maximum", input.Name)
+		}
+		if input.ValueKind == InputValueBoolean && len(input.AllowedValues) != 0 {
+			return fmt.Errorf("agent boolean input %q uses the fixed true/false grammar rather than allowed values", input.Name)
+		}
+		for _, value := range input.AllowedValues {
+			if err := validateInputScalar(input, value); err != nil {
+				return fmt.Errorf("agent input %q has invalid allowed value %q: %w", input.Name, value, err)
+			}
+		}
+		if input.DefaultValue != nil {
+			if err := validateStableInputLiteral(*input.DefaultValue); err != nil {
+				return fmt.Errorf("agent input %q has invalid default: %w", input.Name, err)
+			}
+			if err := validateInputValue(input, *input.DefaultValue); err != nil {
+				return fmt.Errorf("agent input %q has invalid default: %w", input.Name, err)
+			}
 		}
 		if _, exists := seenInputs[input.Name]; exists {
 			return fmt.Errorf("agent input %q is declared more than once", input.Name)
@@ -765,14 +903,34 @@ func validateAgentContract(command CommandSpec) error {
 			if len(input.AllowedValues) != 0 {
 				return fmt.Errorf("agent reference input %q must accept opaque values rather than an enumeration", input.Name)
 			}
+			if input.ValueKind != InputValueText {
+				return fmt.Errorf("agent reference input %q must use text values", input.Name)
+			}
 		}
 		if input.Source == InputSourceArgument || input.Source == InputSourceFlag {
 			commandLineInputs[input.Name] = struct{}{}
 		}
 	}
-	syntaxInputs, err := parseArgumentSyntaxInputs(command.Args)
+	for _, input := range contract.Inputs {
+		if err := validateInputRelations(input, inputsByName); err != nil {
+			return err
+		}
+	}
+	if err := validateInputRelationSatisfiability(inputsByName); err != nil {
+		return err
+	}
+	syntaxInputs, syntaxPositionals, err := parseArgumentSyntaxInputs(command.Args)
 	if err != nil {
 		return err
+	}
+	declaredPositionals := make([]string, 0)
+	for _, input := range contract.Inputs {
+		if input.Source == InputSourceArgument {
+			declaredPositionals = append(declaredPositionals, input.Name)
+		}
+	}
+	if !equalStrings(declaredPositionals, syntaxPositionals) {
+		return fmt.Errorf("agent positional input order %v does not match argument syntax order %v", declaredPositionals, syntaxPositionals)
 	}
 	for input := range commandLineInputs {
 		syntax, exists := syntaxInputs[input]
@@ -785,6 +943,12 @@ func validateAgentContract(command CommandSpec) error {
 		}
 		if !equalStrings(declared.AllowedValues, syntax.AllowedValues) {
 			return fmt.Errorf("agent input %q allowed values %v do not match argument syntax values %v", input, declared.AllowedValues, syntax.AllowedValues)
+		}
+		if declared.Source == InputSourceFlag {
+			declaredTakesValue := declared.ValueKind != InputValueBoolean
+			if declaredTakesValue != syntax.TakesValue {
+				return fmt.Errorf("agent input %q value kind %q does not match whether argument syntax takes a value", input, declared.ValueKind)
+			}
 		}
 	}
 	for input := range syntaxInputs {
@@ -926,7 +1090,22 @@ func validateAgentContract(command CommandSpec) error {
 	if err := requireAgentError(seenErrors, "operation_canceled", fault.KindCanceled, true); err != nil {
 		return err
 	}
-	if _, noOutput := seenFormats[OutputFormatNone]; !noOutput {
+	if err := requireAgentError(seenErrors, "invalid_arguments", fault.KindInvalidInput, false); err != nil {
+		return err
+	}
+	_, noOutput := seenFormats[OutputFormatNone]
+	_, hasReadOutputFailure := seenErrors["output_write_failed"]
+	_, hasMutationOutputFailure := seenErrors["mutation_output_write_failed"]
+	if command.Effect == operation.EffectRead && hasMutationOutputFailure {
+		return fmt.Errorf("read command must not declare mutation_output_write_failed")
+	}
+	if command.Effect != operation.EffectRead && hasReadOutputFailure {
+		return fmt.Errorf("mutating command must not declare retryable output_write_failed")
+	}
+	if noOutput && (hasReadOutputFailure || hasMutationOutputFailure) {
+		return fmt.Errorf("command without output must not declare an output write failure")
+	}
+	if !noOutput && command.Effect == operation.EffectRead {
 		if err := requireAgentError(seenErrors, "output_write_failed", fault.KindInternal, true); err != nil {
 			return err
 		}
@@ -978,6 +1157,11 @@ func validateAgentContract(command CommandSpec) error {
 		{code: "unclassified_mutation_outcome", kind: fault.KindContract},
 	} {
 		if err := requireAgentError(seenErrors, required.code, required.kind, required.retryable); err != nil {
+			return err
+		}
+	}
+	if !noOutput {
+		if err := requireAgentError(seenErrors, "mutation_output_write_failed", fault.KindInternal, false); err != nil {
 			return err
 		}
 	}
@@ -1182,7 +1366,8 @@ func validateCapabilityID(value string) error {
 }
 
 func validateInputName(input CommandInput) error {
-	if input.Name == "" || strings.TrimSpace(input.Name) != input.Name || strings.ContainsAny(input.Name, "\t\r\n ") {
+	if input.Name == "" || len(input.Name) > 4096 || !utf8.ValidString(input.Name) || strings.TrimSpace(input.Name) != input.Name ||
+		strings.IndexFunc(input.Name, func(r rune) bool { return unicode.IsSpace(r) || isUnsafeContractRune(r) }) >= 0 {
 		return fmt.Errorf("input name is missing or invalid: %q", input.Name)
 	}
 	switch input.Source {
@@ -1197,13 +1382,212 @@ func validateInputName(input CommandInput) error {
 		if err := validateReferenceName(input.Name); err != nil {
 			return fmt.Errorf("argument input: %w", err)
 		}
+	case InputSourceStdin:
+		if err := validateOutputFieldName(input.Name); err != nil {
+			return fmt.Errorf("stdin input: %w", err)
+		}
+	case InputSourceEnvironment:
+		if err := validateEnvironmentInputName(input.Name); err != nil {
+			return err
+		}
+	case InputSourceConfiguration:
+		for _, segment := range strings.Split(input.Name, ".") {
+			if err := validateOutputFieldName(segment); err != nil {
+				return fmt.Errorf("configuration input name is invalid: %q", input.Name)
+			}
+		}
 	}
 	return nil
+}
+
+func validateEnvironmentInputName(value string) error {
+	if value == "" {
+		return fmt.Errorf("environment input name is empty")
+	}
+	for index, character := range value {
+		switch {
+		case character >= 'A' && character <= 'Z':
+		case index > 0 && character >= '0' && character <= '9':
+		case index > 0 && character == '_':
+		default:
+			return fmt.Errorf("environment input name is invalid: %q", value)
+		}
+	}
+	return nil
+}
+
+func validateInputValue(input CommandInput, value string) error {
+	if len(input.AllowedValues) != 0 {
+		allowed := false
+		for _, candidate := range input.AllowedValues {
+			if value == candidate {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("value must be one of %s", strings.Join(input.AllowedValues, ", "))
+		}
+	}
+	return validateInputScalar(input, value)
+}
+
+func validateInputScalar(input CommandInput, value string) error {
+	if !utf8.ValidString(value) || strings.IndexFunc(value, isUnsafeContractRune) >= 0 {
+		return fmt.Errorf("value contains invalid structural text")
+	}
+	switch input.ValueKind {
+	case InputValueText:
+		return nil
+	case InputValueInteger:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("value must be a base-10 integer")
+		}
+		if input.Minimum != nil && parsed < *input.Minimum {
+			return fmt.Errorf("value must be at least %d", *input.Minimum)
+		}
+		if input.Maximum != nil && parsed > *input.Maximum {
+			return fmt.Errorf("value must be at most %d", *input.Maximum)
+		}
+		return nil
+	case InputValueBoolean:
+		if value != "true" && value != "false" {
+			return fmt.Errorf("value must be true or false")
+		}
+		return nil
+	default:
+		return fmt.Errorf("value kind is invalid")
+	}
+}
+
+func validateStableInputLiteral(value string) error {
+	for _, character := range []byte(value) {
+		if character < 0x20 || character > 0x7e {
+			return fmt.Errorf("catalog-owned values must use stable printable ASCII bytes")
+		}
+	}
+	return nil
+}
+
+func validateInputRelations(input CommandInput, inputs map[string]CommandInput) error {
+	requires := make(map[string]struct{}, len(input.Requires))
+	for _, name := range input.Requires {
+		if name == input.Name {
+			return fmt.Errorf("agent input %q cannot require itself", input.Name)
+		}
+		if _, duplicate := requires[name]; duplicate {
+			return fmt.Errorf("agent input %q requires %q more than once", input.Name, name)
+		}
+		target, exists := inputs[name]
+		if !exists {
+			return fmt.Errorf("agent input %q requires unknown input %q", input.Name, name)
+		}
+		if !isCommandLineInput(input) || !isCommandLineInput(target) {
+			return fmt.Errorf("agent input %q relation to %q is not enforceable by the command-line parser", input.Name, name)
+		}
+		if input.Required && !target.Required {
+			return fmt.Errorf("required agent input %q makes optional required input %q effectively mandatory", input.Name, name)
+		}
+		requires[name] = struct{}{}
+	}
+	conflicts := make(map[string]struct{}, len(input.ConflictsWith))
+	for _, name := range input.ConflictsWith {
+		if name == input.Name {
+			return fmt.Errorf("agent input %q cannot conflict with itself", input.Name)
+		}
+		if _, duplicate := conflicts[name]; duplicate {
+			return fmt.Errorf("agent input %q conflicts with %q more than once", input.Name, name)
+		}
+		target, exists := inputs[name]
+		if !exists {
+			return fmt.Errorf("agent input %q conflicts with unknown input %q", input.Name, name)
+		}
+		if !isCommandLineInput(input) || !isCommandLineInput(target) {
+			return fmt.Errorf("agent input %q relation to %q is not enforceable by the command-line parser", input.Name, name)
+		}
+		if _, required := requires[name]; required {
+			return fmt.Errorf("agent input %q both requires and conflicts with %q", input.Name, name)
+		}
+		if input.Required && target.Required {
+			return fmt.Errorf("required agent inputs %q and %q cannot conflict", input.Name, name)
+		}
+		conflicts[name] = struct{}{}
+	}
+	return nil
+}
+
+// validateInputRelationSatisfiability proves that the required invocation and
+// every optional input can appear in at least one valid invocation after the
+// transitive requires closure is applied. Conflicts are symmetric presence
+// constraints even when declared on only one endpoint.
+func validateInputRelationSatisfiability(inputs map[string]CommandInput) error {
+	names := make([]string, 0, len(inputs))
+	required := make(map[string]bool, len(inputs))
+	for name, input := range inputs {
+		names = append(names, name)
+		if input.Required {
+			required[name] = true
+		}
+	}
+	sort.Strings(names)
+	if left, right, conflict := inputPresenceConflict(required, inputs); conflict {
+		return fmt.Errorf("required agent inputs %q and %q conflict after dependency expansion", left, right)
+	}
+	for _, name := range names {
+		if inputs[name].Required {
+			continue
+		}
+		selected := make(map[string]bool, len(required)+1)
+		for requiredName := range required {
+			selected[requiredName] = true
+		}
+		selected[name] = true
+		if left, right, conflict := inputPresenceConflict(selected, inputs); conflict {
+			return fmt.Errorf("optional agent input %q is unusable because %q and %q conflict after dependency expansion", name, left, right)
+		}
+	}
+	return nil
+}
+
+func inputPresenceConflict(selected map[string]bool, inputs map[string]CommandInput) (string, string, bool) {
+	queue := make([]string, 0, len(selected))
+	for name := range selected {
+		queue = append(queue, name)
+	}
+	sort.Strings(queue)
+	for index := 0; index < len(queue); index++ {
+		name := queue[index]
+		for _, required := range inputs[name].Requires {
+			if !selected[required] {
+				selected[required] = true
+				queue = append(queue, required)
+			}
+		}
+	}
+	selectedNames := make([]string, 0, len(selected))
+	for name := range selected {
+		selectedNames = append(selectedNames, name)
+	}
+	sort.Strings(selectedNames)
+	for _, name := range selectedNames {
+		for _, conflict := range inputs[name].ConflictsWith {
+			if selected[conflict] {
+				return name, conflict, true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func isCommandLineInput(input CommandInput) bool {
+	return input.Source == InputSourceArgument || input.Source == InputSourceFlag
 }
 
 type argumentSyntaxInput struct {
 	Required      bool
 	AllowedValues []string
+	TakesValue    bool
 }
 
 type argumentSyntaxToken struct {
@@ -1211,8 +1595,9 @@ type argumentSyntaxToken struct {
 	Optional bool
 }
 
-func parseArgumentSyntaxInputs(syntax string) (map[string]argumentSyntaxInput, error) {
+func parseArgumentSyntaxInputs(syntax string) (map[string]argumentSyntaxInput, []string, error) {
 	inputs := make(map[string]argumentSyntaxInput)
+	positionals := make([]string, 0)
 	rawTokens := strings.Fields(syntax)
 	tokens := make([]argumentSyntaxToken, 0, len(rawTokens))
 	inOptional := false
@@ -1221,16 +1606,16 @@ func parseArgumentSyntaxInputs(syntax string) (map[string]argumentSyntaxInput, e
 		closes := strings.HasSuffix(raw, "]")
 		if opens {
 			if inOptional {
-				return nil, fmt.Errorf("argument syntax contains nested optional groups")
+				return nil, nil, fmt.Errorf("argument syntax contains nested optional groups")
 			}
 			inOptional = true
 		}
 		if closes && !inOptional {
-			return nil, fmt.Errorf("argument syntax contains an unmatched closing bracket")
+			return nil, nil, fmt.Errorf("argument syntax contains an unmatched closing bracket")
 		}
 		value := strings.Trim(raw, "[]()")
 		if value == "" {
-			return nil, fmt.Errorf("argument syntax contains an empty token")
+			return nil, nil, fmt.Errorf("argument syntax contains an empty token")
 		}
 		tokens = append(tokens, argumentSyntaxToken{Value: value, Optional: inOptional})
 		if closes {
@@ -1238,16 +1623,17 @@ func parseArgumentSyntaxInputs(syntax string) (map[string]argumentSyntaxInput, e
 		}
 	}
 	if inOptional {
-		return nil, fmt.Errorf("argument syntax contains an unclosed optional group")
+		return nil, nil, fmt.Errorf("argument syntax contains an unclosed optional group")
 	}
 
+	optionalPositionalSeen := false
 	for index := 0; index < len(tokens); index++ {
 		token := tokens[index]
 		if strings.HasPrefix(token.Value, "--") {
 			parts := strings.SplitN(token.Value, "=", 2)
 			name := parts[0]
 			if err := validateInputName(CommandInput{Name: name, Source: InputSourceFlag}); err != nil {
-				return nil, fmt.Errorf("argument syntax: %w", err)
+				return nil, nil, fmt.Errorf("argument syntax: %w", err)
 			}
 			valueSyntax := ""
 			if len(parts) == 2 {
@@ -1258,40 +1644,47 @@ func parseArgumentSyntaxInputs(syntax string) (map[string]argumentSyntaxInput, e
 			}
 			allowed, err := argumentSyntaxAllowedValues(valueSyntax)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if _, exists := inputs[name]; exists {
-				return nil, fmt.Errorf("argument syntax input %q is declared more than once", name)
+				return nil, nil, fmt.Errorf("argument syntax input %q is declared more than once", name)
 			}
-			inputs[name] = argumentSyntaxInput{Required: !token.Optional, AllowedValues: allowed}
+			inputs[name] = argumentSyntaxInput{Required: !token.Optional, AllowedValues: allowed, TakesValue: valueSyntax != ""}
 			continue
 		}
 
 		if strings.HasPrefix(token.Value, "<") && strings.HasSuffix(token.Value, ">") {
 			name := strings.Trim(token.Value, "<>")
 			if err := validateInputName(CommandInput{Name: name, Source: InputSourceArgument}); err != nil {
-				return nil, fmt.Errorf("argument syntax: %w", err)
+				return nil, nil, fmt.Errorf("argument syntax: %w", err)
 			}
 			if _, exists := inputs[name]; exists {
-				return nil, fmt.Errorf("argument syntax input %q is declared more than once", name)
+				return nil, nil, fmt.Errorf("argument syntax input %q is declared more than once", name)
 			}
-			inputs[name] = argumentSyntaxInput{Required: !token.Optional, AllowedValues: []string{}}
+			if !token.Optional && optionalPositionalSeen {
+				return nil, nil, fmt.Errorf("required positional input %q follows an optional positional input", name)
+			}
+			optionalPositionalSeen = optionalPositionalSeen || token.Optional
+			positionals = append(positionals, name)
+			inputs[name] = argumentSyntaxInput{Required: !token.Optional, AllowedValues: []string{}, TakesValue: true}
 			continue
 		}
 
 		if token.Optional && !strings.ContainsAny(token.Value, "|<>=") {
 			if err := validateInputName(CommandInput{Name: token.Value, Source: InputSourceArgument}); err != nil {
-				return nil, fmt.Errorf("argument syntax: %w", err)
+				return nil, nil, fmt.Errorf("argument syntax: %w", err)
 			}
 			if _, exists := inputs[token.Value]; exists {
-				return nil, fmt.Errorf("argument syntax input %q is declared more than once", token.Value)
+				return nil, nil, fmt.Errorf("argument syntax input %q is declared more than once", token.Value)
 			}
-			inputs[token.Value] = argumentSyntaxInput{Required: false, AllowedValues: []string{}}
+			optionalPositionalSeen = true
+			positionals = append(positionals, token.Value)
+			inputs[token.Value] = argumentSyntaxInput{Required: false, AllowedValues: []string{}, TakesValue: true}
 			continue
 		}
-		return nil, fmt.Errorf("argument syntax token %q is outside the supported grammar", token.Value)
+		return nil, nil, fmt.Errorf("argument syntax token %q is outside the supported grammar", token.Value)
 	}
-	return inputs, nil
+	return inputs, positionals, nil
 }
 
 func isArgumentValueSyntax(value string) bool {
@@ -1587,6 +1980,20 @@ func cloneAgentContract(contract AgentContract) AgentContract {
 	contract.Inputs = cloneSlice(contract.Inputs)
 	for index := range contract.Inputs {
 		contract.Inputs[index].AllowedValues = cloneSlice(contract.Inputs[index].AllowedValues)
+		contract.Inputs[index].Requires = cloneSlice(contract.Inputs[index].Requires)
+		contract.Inputs[index].ConflictsWith = cloneSlice(contract.Inputs[index].ConflictsWith)
+		if contract.Inputs[index].DefaultValue != nil {
+			value := *contract.Inputs[index].DefaultValue
+			contract.Inputs[index].DefaultValue = &value
+		}
+		if contract.Inputs[index].Minimum != nil {
+			value := *contract.Inputs[index].Minimum
+			contract.Inputs[index].Minimum = &value
+		}
+		if contract.Inputs[index].Maximum != nil {
+			value := *contract.Inputs[index].Maximum
+			contract.Inputs[index].Maximum = &value
+		}
 	}
 	contract.Output.Formats = cloneSlice(contract.Output.Formats)
 	contract.Output.Fields = cloneSlice(contract.Output.Fields)

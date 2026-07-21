@@ -19,9 +19,14 @@ func TestRootHelpIsDerivedFromCatalog(t *testing.T) {
 		t.Fatalf("Run(help) code = %d, stderr = %q", code, stderr.String())
 	}
 	output := stdout.String()
-	for _, spec := range command.catalog.Commands() {
-		if !strings.Contains(output, spec.Path) || !strings.Contains(output, spec.Summary) {
-			t.Errorf("root help does not contain catalog entry %+v\n%s", spec, output)
+	for _, want := range []string{"doctor", "help", "version", "sample", "Namespace with 2 commands"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("root help lacks %q\n%s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"sample list", "sample read"} {
+		if strings.Contains(output, unwanted) {
+			t.Errorf("root help repeats namespace leaf %q\n%s", unwanted, output)
 		}
 	}
 }
@@ -38,11 +43,65 @@ func TestCommandHelpUsesCatalogMetadataAndDerivedReferences(t *testing.T) {
 		"Read exactly one offline sample by opaque ID.",
 		"Effect: read",
 		"Role: act",
+		"Invocation grammar:",
+		"Dash-prefixed flag values: --flag=-value",
+		"Dash-prefixed positional values: -- -value",
+		"Inputs:",
+		"source: flag; required: true; value: text; cardinality: single",
+		"opaque reference kind: sample",
+		"default when omitted: \"tsv\"",
 		"Consumes reference: sample from input --id",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("command help lacks %q\n%s", want, output)
 		}
+	}
+}
+
+func TestHumanAndAgentHelpProjectCompleteTypedInputContract(t *testing.T) {
+	minimumLimit, maximumLimit := int64(1), int64(10)
+	minimumContext, maximumContext := int64(0), int64(5)
+	spec := utilitySpec("events inspect")
+	spec.Args = "[--tag <tag>] [--limit <count>] [--context <lines>] [--brief]"
+	spec.Agent.Inputs = []CommandInput{
+		{Name: "--tag", Source: InputSourceFlag, ValueKind: InputValueText, Cardinality: InputCardinalityRepeatable, Description: "Select repeated tags.", AllowedValues: []string{}},
+		{Name: "--limit", Source: InputSourceFlag, ValueKind: InputValueInteger, Cardinality: InputCardinalitySingle, Description: "Bound the event count.", AllowedValues: []string{}, DefaultValue: stringPointer("3"), Minimum: &minimumLimit, Maximum: &maximumLimit},
+		{Name: "--context", Source: InputSourceFlag, ValueKind: InputValueInteger, Cardinality: InputCardinalitySingle, Description: "Expand matching context.", AllowedValues: []string{}, Minimum: &minimumContext, Maximum: &maximumContext, Requires: []string{"--tag"}, ConflictsWith: []string{"--brief"}},
+		{Name: "--brief", Source: InputSourceFlag, ValueKind: InputValueBoolean, Cardinality: InputCardinalitySingle, Description: "Suppress expanded context.", AllowedValues: []string{}},
+	}
+	catalog := NewCatalog(spec)
+	if err := catalog.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	human := string(renderCommandHelp(spec))
+	for _, want := range []string{
+		"cardinality: repeatable",
+		"default when omitted: \"3\"",
+		"range: 1..10",
+		"range: 0..5",
+		"requires when supplied: --tag",
+		"conflicts with: --brief",
+		"Value flags: --flag value or --flag=value",
+		"Boolean flags: --flag, --flag=true, --flag=false",
+	} {
+		if !strings.Contains(human, want) {
+			t.Errorf("human help lacks %q:\n%s", want, human)
+		}
+	}
+
+	encoded, err := (&CLI{catalog: catalog}).renderAgentHelp(spec.Path, true, catalog.Commands())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document agentDocument
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	if len(document.Commands) != 1 || !reflect.DeepEqual(document.Commands[0].Contract.Inputs, spec.Agent.Inputs) {
+		t.Fatalf("agent typed inputs = %+v, want %+v", document.Commands, spec.Agent.Inputs)
+	}
+	if !reflect.DeepEqual(document.InvocationGrammar, defaultAgentInvocationGrammar()) {
+		t.Fatalf("agent invocation grammar = %+v", document.InvocationGrammar)
 	}
 }
 
@@ -91,7 +150,7 @@ func TestRootAgentHelpIsACompactProjectionOfTheCatalog(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
 		t.Fatalf("agent help is not JSON: %v\n%s", err, stdout.String())
 	}
-	if document.SchemaVersion != 5 || agentHelpSchemaVersion != 5 || document.View != "index" || document.Program != ProgramName {
+	if document.SchemaVersion != 6 || agentHelpSchemaVersion != 6 || document.View != "index" || document.Program != ProgramName {
 		t.Fatalf("agent document header = %+v", document)
 	}
 	if document.ScopeRequest.InvocationTemplate != "agentic-cli-foundry help <command-or-namespace> --format agent" ||
@@ -164,6 +223,23 @@ func TestScopedAgentHelpIsACompleteProjectionOfEveryCatalogCommand(t *testing.T)
 	}
 }
 
+func TestAgentHelpSeparatesRateTimingFromReplayPermission(t *testing.T) {
+	document := runAgentHelpForTest(t, []string{"help", "sample", "--format=agent"})
+	var contract agentErrorContract
+	if err := json.Unmarshal(document["error_contract"], &contract); err != nil {
+		t.Fatal(err)
+	}
+	descriptions := make(map[string]string, len(contract.Fields))
+	for _, field := range contract.Fields {
+		descriptions[field.Name] = field.Description
+	}
+	if !strings.Contains(descriptions["retryable"], "same logical command") ||
+		!strings.Contains(descriptions["retry_after"], "otherwise null") ||
+		!strings.Contains(descriptions["retry_after"], "never grants logical replay permission") {
+		t.Fatalf("rate/replay field descriptions = %+v", descriptions)
+	}
+}
+
 func TestAgentHelpRootAndScopedShapeSnapshots(t *testing.T) {
 	root := runAgentHelpForTest(t, []string{"help", "--format=agent"})
 	assertJSONKeys(t, root, []string{"commands", "program", "schema_version", "scope_request", "view"})
@@ -183,7 +259,20 @@ func TestAgentHelpRootAndScopedShapeSnapshots(t *testing.T) {
 	assertJSONKeys(t, scopeRequest, []string{"invocation_template", "known_path_max_invocations", "selector_fields", "unknown_outcome_max_invocations"})
 
 	scoped := runAgentHelpForTest(t, []string{"help", "sample", "--format=agent"})
-	assertJSONKeys(t, scoped, []string{"commands", "error_contract", "global_inputs", "io_contract", "program", "schema_version", "scope", "view", "workflows"})
+	assertJSONKeys(t, scoped, []string{"commands", "error_contract", "global_inputs", "invocation_grammar", "io_contract", "program", "schema_version", "scope", "view", "workflows"})
+	var invocationGrammar map[string]json.RawMessage
+	if err := json.Unmarshal(scoped["invocation_grammar"], &invocationGrammar); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONKeys(t, invocationGrammar, []string{"boolean_flag_forms", "dash_prefixed_flag_value_form", "dash_prefixed_positional_usage", "positional_only_marker", "value_flag_forms"})
+	var globalInputs []map[string]json.RawMessage
+	if err := json.Unmarshal(scoped["global_inputs"], &globalInputs); err != nil {
+		t.Fatal(err)
+	}
+	if len(globalInputs) != 1 {
+		t.Fatalf("global inputs = %+v", globalInputs)
+	}
+	assertJSONKeys(t, globalInputs[0], []string{"allowed_values", "cardinality", "default_value", "description", "name", "required", "source", "value_kind"})
 	var ioContract map[string]json.RawMessage
 	if err := json.Unmarshal(scoped["io_contract"], &ioContract); err != nil {
 		t.Fatal(err)
@@ -202,6 +291,24 @@ func TestAgentHelpRootAndScopedShapeSnapshots(t *testing.T) {
 			var contract map[string]json.RawMessage
 			if err := json.Unmarshal(command["contract"], &contract); err != nil {
 				t.Fatal(err)
+			}
+			var inputs []map[string]json.RawMessage
+			if err := json.Unmarshal(contract["inputs"], &inputs); err != nil {
+				t.Fatal(err)
+			}
+			for _, input := range inputs {
+				var name string
+				if err := json.Unmarshal(input["name"], &name); err != nil {
+					t.Fatal(err)
+				}
+				keys := []string{"allowed_values", "cardinality", "description", "name", "required", "source", "value_kind"}
+				if name == "--format" {
+					keys = append(keys, "default_value")
+				}
+				if name == "--id" {
+					keys = append(keys, "reference_kind")
+				}
+				assertJSONKeys(t, input, keys)
 			}
 			var output map[string]json.RawMessage
 			if err := json.Unmarshal(contract["output"], &output); err != nil {
@@ -388,8 +495,27 @@ func TestTextHelpCanSelectNamespace(t *testing.T) {
 	if code := runCLI(command, []string{"help", "sample"}); code != ExitOK {
 		t.Fatalf("Run(namespace help) code = %d, stderr = %q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "sample list") || !strings.Contains(stdout.String(), "sample read") || strings.Contains(stdout.String(), "doctor") {
+	if !strings.Contains(stdout.String(), "  list") || !strings.Contains(stdout.String(), "  read") ||
+		strings.Contains(stdout.String(), "sample list") || strings.Contains(stdout.String(), "sample read") || strings.Contains(stdout.String(), "doctor") {
 		t.Fatalf("namespace text = %q", stdout.String())
+	}
+}
+
+func TestTrailingHelpAliasSupportsNamespaceAndExactCommand(t *testing.T) {
+	for _, args := range [][]string{{"sample", "--help"}, {"sample", "read", "--help"}, {"sample", "-h"}} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			command := New(strings.NewReader(""), &stdout, &stderr)
+			if code := runCLI(command, args); code != ExitOK {
+				t.Fatalf("Run(%v) code = %d, stderr = %q", args, code, stderr.String())
+			}
+			if len(args) == 2 && !strings.Contains(stdout.String(), "Commands in namespace sample:") {
+				t.Fatalf("namespace alias output = %q", stdout.String())
+			}
+			if len(args) == 3 && !strings.Contains(stdout.String(), "agentic-cli-foundry sample read") {
+				t.Fatalf("exact alias output = %q", stdout.String())
+			}
+		})
 	}
 }
 
@@ -626,7 +752,7 @@ func TestDerivedScaleScopedAgentHelpFitsWholeResponseBudget(t *testing.T) {
 	if err := json.Unmarshal(encoded, &document); err != nil {
 		t.Fatal(err)
 	}
-	if document.SchemaVersion != 5 || len(document.Commands) != len(selected) || len(document.Workflows) != 1 ||
+	if document.SchemaVersion != 6 || len(document.Commands) != len(selected) || len(document.Workflows) != 1 ||
 		len(document.Workflows[0].Producers) != 18 || len(document.Workflows[0].Consumers) != 18 {
 		t.Fatalf("derived-scale grouped document = schema %d commands %d workflows %+v", document.SchemaVersion, len(document.Commands), document.Workflows)
 	}

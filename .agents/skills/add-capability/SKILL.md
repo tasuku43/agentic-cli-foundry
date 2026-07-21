@@ -22,6 +22,11 @@ Read `docs/00_theses.md` before designing the change. A capability is complete
 only when its user outcome, safety boundary, discoverability, and verification
 are explicit.
 
+For a non-trivial capability, create `docs/work/<change-name>/` from the work
+packet template and keep its goal, verified context, chosen plan, tasks, and
+gate evidence current. Promote durable conclusions into governing documents;
+the packet is evidence, not a second product contract.
+
 ## 1. Define the user outcome
 
 Write one sentence describing what the user can accomplish. Prefer task language
@@ -100,11 +105,29 @@ command must not create a second raw transport or bypass validation.
 
 Add the command to the canonical catalog and derive dispatch and help from that
 entry. Complete its `AgentContract`: stable capability ID, user outcome,
-described inputs and allowed values, formats, fields/types/descriptions,
+inputs with source, value kind, cardinality, required/default behavior,
+allowed values, numeric bounds, dependencies, and conflicts; formats,
+fields/types/descriptions,
 delivery, collection coverage, non-auth prerequisites, optional secret-free authentication
 requirement, stable faults with exact next commands, and mutation contract when
 applicable. Nil collections mean unknown and are invalid; use explicit empty
 collections for known none.
+
+The shared dispatcher parses argument and flag inputs exactly once from this
+contract before invoking a handler. Handlers receive `ParsedInputs`, not raw
+argv, and preserve absent, explicitly supplied empty/zero/false, and defaulted
+values through `Provided` and `Defaulted`. Environment, configuration, and
+stdin inputs remain owned by their typed source resolvers; the argv parser must
+not synthesize or require them. Keep positional declaration order identical to
+usage order, place no required positional after an optional one, and keep a
+repeatable positional last. Use `--flag=value` when a flag value itself begins
+with a dash, and use the published `--` positional-only marker before a
+dash-prefixed positional value. Verify exact human and scoped agent help expose
+this grammar rather than requiring implementation knowledge. Repeat a
+repeatable flag once per value; preserve occurrence order and duplicates, and
+do not invent comma splitting. Boolean flags accept bare `--flag` for true or
+the explicit `--flag=true` / `--flag=false` forms; a separated boolean token is
+not a value.
 
 Declare delivery independently from collection coverage. `complete` delivery
 returns the entire task-selected result or no success; it does not by itself
@@ -151,6 +174,11 @@ Root help must not regain inputs, output detail, authentication, errors,
 mutation facts, or workflows as the catalog grows, and each encoded command
 entry must remain within the 512-byte catalog budget.
 
+Exercise the public help forms directly: `<binary> help --format agent` for the
+root index, `<binary> help <namespace> --format agent` or
+`<binary> help <exact-command> --format agent` for scoped machine contracts,
+and `<binary> <exact-command> --help` for exact human help.
+
 Treat `scope_request` invocation counts as help-discovery bounds only. An
 unknown outcome needs the root index plus one selected scoped contract. A known
 path needs one scoped-help invocation when the caller already holds every
@@ -195,6 +223,14 @@ environment, or configuration inputs. Declare the common
 cancellation/output failures and, for mutations, every standard invoker
 contract or policy failure before exposing the command.
 
+The standard non-retryable mutation set is
+`invalid_mutation_contract` (`contract`), `missing_mutation_action`
+(`contract`), `missing_mutation_policy` (`rejected`), `mutation_rejected`
+(`rejected`), and `unclassified_mutation_outcome` (`contract`). A mutation with
+output also declares non-retryable `mutation_output_write_failed` (`internal`);
+every command declares the shared cancellation contract. Use catalog validation
+as the executable authority for the exact set, kinds, and retryability.
+
 Treat mutation cancellation by phase. Before the action, `operation_canceled`
 is retryable because the invoker proves zero attempts. After the action begins,
 return a valid structured adapter fault for a known classification and let the
@@ -202,6 +238,13 @@ invoker strip its private cause. Never return a raw cancellation as proof that
 the write did not happen. Unclassified post-action errors become non-retryable
 `unclassified_mutation_outcome`; declare that code in the mutation catalog and
 point its next action only to an exact read/discover reconciliation command.
+Render first, then pass every successful result to the effect-aware complete
+write boundary. For create/write commands, declare non-retryable
+`mutation_output_write_failed` with only a read-only reconciliation action;
+late cancellation or a short stdout write must never advertise the confirmed
+mutation as safe to repeat. A non-retryable mutation `rate_limited` recovery is
+also read-only. Treat positive `retry_after` as timing evidence independent of
+the `retryable` replay decision, and render an absent rate window as unknown.
 
 ## 5. Add authentication and API boundaries only when needed
 
@@ -232,6 +275,7 @@ external API capability.
 - Do not implement OAuth protocol machinery. Add a reviewed OAuth library only
   in a derived project whose accepted security model selects OAuth.
 - Keep schema-versioned non-secret user configuration separate from credential storage. Decode it strictly within a byte bound, fail closed on an invalid higher-priority environment or persistent value, and never probe another method after a selected method fails.
+- For an injected persistent-configuration path, confine staging and replacement through one verified opened parent directory, use create-exclusive temporary files, revalidate parent/staged/target identities before and after replacement, and sync the directory where the platform provides that guarantee. State Windows ACL, atomicity, and durability limitations explicitly; an error after replacement begins leaves the active version uncertain.
 - If OAuth launches a browser, separate URL presentation, platform auto-open, and callback receipt; retain a manual URL fallback and never place authorization codes, PKCE verifiers, tokens, PATs, or client secrets in subprocess argv.
 - Make one-page adapters return an opaque cursor envelope. Use bounded
   complete traversal, or declare a paged public result with the catalog-bound
@@ -239,6 +283,13 @@ external API capability.
 - Keep wire DTOs in infrastructure. Add publishable fixtures under `testdata`
   and bind their path, digest, provenance, and license in
   `.harness/schemas.json`.
+- Classify each mutation payload as replacement, patch, or append. Preserve
+  omitted separately from explicit empty/zero/false and provider `null`, and
+  assert exact encoded bodies for every meaningful presence state.
+- Keep access limitation separate from delivery/coverage and core record
+  validity separate from optional enrichment. Optional enrichment may fail
+  wholly unknown with a bounded reason; never publish a partially inferred
+  relation from labels, order, indentation, or neighboring records.
 - Map provider failures once into stable `fault.Error` values. Never expose a
   raw response body or cause.
 
@@ -250,11 +301,20 @@ Add the smallest set that proves the capability:
 - application tests with fake ports for ordering and failure behavior;
 - adapter contract tests for exact requests and bounded responses;
 - CLI tests from argv through stdout, stderr, exit code, and captured effects;
+- argv grammar tests for equals-form dash-prefixed opaque IDs, rejection of the
+  ambiguous separated form, repeatable-value order and duplicates, explicit
+  false versus omitted/defaulted booleans, unsupported boolean spellings, and
+  positional-only dash-prefixed values;
 - rejection tests proving invalid input causes zero external calls;
 - catalog tests rejecting missing, extra, duplicate, optional, non-CLI, non-opaque, and reference-kind-mismatched mutation bindings;
 - catalog tests rejecting optional act references and closed required-reference cycles;
 - authentication/policy/cancellation tests proving zero downstream mutation;
 - mutation outcome tests proving structured deadline/cancellation causes retain their typed classification, unstructured post-action errors are non-retryable, confirmed success is not overwritten, and reconciliation cannot point to a mutation;
+- confirmed-mutation output tests proving late cancellation does not replace
+  success, short writes emit non-retryable `mutation_output_write_failed`, and
+  every recovery remains read-only;
+- rate-limit tests covering known and unknown timing independently from
+  retryability, including a non-retryable mutation with positive timing;
 - authentication-binding tests with simultaneous accounts/authorities,
   missing, stale, wrong-account, and cross-session IDs, typed-nil task ports,
   expiry races, refresh identity mismatch/failure, and zero unintended provider
@@ -303,6 +363,10 @@ Run:
 ./scripts/check.sh full
 ./scripts/check.sh security
 ```
+
+`task check` is the single completion decision and must pass after the focused
+profiles above. Publication work also requires `task public:check`; release
+work requires `task release:check`.
 
 Before public release, also confirm `./scripts/check.sh public` passes with the
 stored identity-ready value `profile: ready` in `.harness/project.json`.

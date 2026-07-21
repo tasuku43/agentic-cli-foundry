@@ -40,7 +40,8 @@ distinguish existing work from bootstrap changes.
 Read `.harness/project.json` and resolve every `project` field:
 
 - `name`: human-facing project name;
-- `binary_name`: portable lowercase executable basename;
+- `binary_name`: portable lowercase executable basename of at most 96 bytes so
+  its Windows `.exe` archive entry remains within the 100-byte format limit;
 - `go_module`: canonical module import path, normally the eventual repository
   URL without a scheme;
 - `github_owner` and `github_repository`: intended public repository identity;
@@ -48,6 +49,13 @@ Read `.harness/project.json` and resolve every `project` field:
 - `formula_class`: valid Ruby class name for the Homebrew Formula;
 - `license_spdx`: deliberate public license choice;
 - `security_contact`: public vulnerability-reporting address.
+
+Also resolve `public_guard.documentation_locale` as one explicit language tag
+for trusted repository and CLI-authored prose. Do not infer or default a locale
+for an existing schema-1 derived repository: first record the language choice
+in its thesis or product contract, then add the field and move the project
+configuration to schema 2. Machine identifiers and external provider data do
+not change locale.
 
 The GitHub owner and license may deliberately match the template. The
 repository, Go module, binary, display name, description, Formula class, and
@@ -68,7 +76,8 @@ and copied private history. Keep synthetic examples public-safe.
 
 ## 3. Configure and preview
 
-Edit only `.harness/project.json` to set the resolved identity. Leave
+Edit only `.harness/project.json` to set the resolved identity and locale
+policy. Leave
 `profile` as `template`; the bootstrap tool owns the transition to the stored
 `ready` value, which means identity-ready only.
 
@@ -115,6 +124,7 @@ git diff --check
 Require:
 
 - stored profile is `ready` (identity-ready only);
+- the explicitly selected `documentation_locale` is unchanged;
 - `go.mod`, repository imports, `cmd/<binary_name>`, and the Formula template
   agree with `.harness/project.json`;
 - `gofmt -l .` prints nothing;

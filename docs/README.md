@@ -64,4 +64,10 @@ Bootstrap changes identity, not intent. Before adding real capabilities, a deriv
 5. Bind each important claim to a type, test, lint, or release check.
 6. Run `task check` and `task public:check`.
 
-All repository documentation is public and written in English by default. A derived project may adopt another language only through an explicit thesis or product-contract decision; public-boundary checks must still be understandable to its maintainers.
+All repository documentation is public and written in English by default. A
+derived project may adopt another language only through an explicit thesis or
+product-contract decision and the matching
+`.harness/project.json` `public_guard.documentation_locale`. The repository
+guard has only a narrow English/Japanese trusted-Markdown canary; maintainers
+remain responsible for broader linguistic review and understandable
+public-boundary checks.

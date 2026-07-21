@@ -31,7 +31,11 @@ Create a new repository from this template, then work from the new repository. D
 
 For Codex, invoke [`$bootstrap-derived-cli`](.agents/skills/bootstrap-derived-cli/SKILL.md) first. It gathers the project identity, uses the same transactional tool described below, verifies imports and gates, and hands off to project-specific thesis work. The manual equivalent is:
 
-1. Edit [`.harness/project.json`](.harness/project.json) with the new project identity and policy.
+1. Edit [`.harness/project.json`](.harness/project.json) with the new project
+   identity and an explicit `public_guard.documentation_locale`. Existing
+   schema-1 derived repositories must choose the locale in their thesis or
+   product contract before moving the configuration to schema 2; no default is
+   applied.
 2. Preview the exact replacements:
 
    ```sh
@@ -78,7 +82,7 @@ go run ./cmd/agentic-cli-foundry --error-format json sample read --id <sample-id
 
 The default `doctor` task is a minimal utility slice through the domain, application, infrastructure, and CLI layers. The synthetic `sample list` and `sample read --id` pair demonstrates discover-to-act composition: copy the lowercase `id` emitted by `sample list` unchanged into `sample read`. Keep these examples as references while adding the first real capability, then remove or rename them only when the replacement has equivalent architectural and catalog tests.
 
-`doctor`, `sample list`, and `sample read` default to stable TSV and also support versioned JSON. The list result contains only `id` and `name`; read adds `content`. Success data is written to stdout only after complete delivery has been bounded and rendered; collection coverage is declared separately so a bounded window cannot look exhaustive. Failures go to stderr as stable text or schema-versioned JSON and distinguish invalid input, authentication, permission, missing or ambiguous targets, rate limits, temporary failures, policy rejection, cancellation, unsupported work, contract violations, and internal faults with dedicated exit statuses. Schema-5 root agent help is a compact outcome/capability index whose machine-readable `scope_request` points to exact-command or namespace help. Only that scoped response returns the complete I/O, output, error, role, prerequisite, authentication, mutation, and grouped reference-workflow contracts, so catalog growth does not duplicate them at the root or expand every producer/consumer pair.
+`doctor`, `sample list`, and `sample read` default to stable TSV and also support versioned JSON. The list result contains only `id` and `name`; read adds `content`. Success data is written to stdout only after complete delivery has been bounded and rendered; collection coverage is declared separately so a bounded window cannot look exhaustive. Failures go to stderr as stable text or schema-versioned JSON and distinguish invalid input, authentication, permission, missing or ambiguous targets, rate limits, temporary failures, policy rejection, cancellation, unsupported work, contract violations, and internal faults with dedicated exit statuses. Schema-6 root agent help is a compact outcome/capability index whose machine-readable `scope_request` points to exact-command or namespace help. Only that scoped response returns the complete typed input, I/O, output, error, role, prerequisite, authentication, mutation, and grouped reference-workflow contracts. The catalog-owned parser validates argv before dispatch, and hierarchical human help is generated from the same input declarations.
 
 ## Repository map
 

@@ -17,8 +17,8 @@ const (
 	maxDoctorDetailBytes = 64 * 1024
 )
 
-func runDoctor(ctx context.Context, c *CLI, command CommandSpec, intent operation.Intent, args []string) int {
-	format, err := parseFormatOnlyArgs(args)
+func runDoctor(ctx context.Context, c *CLI, command CommandSpec, intent operation.Intent, inputs ParsedInputs) int {
+	format, err := parseSuccessFormat(inputs.One("--format"))
 	if err != nil {
 		return c.failUsage(ctx, "invalid_arguments", err.Error()+"; usage: "+command.Usage(), "help doctor", "Correct the command arguments.")
 	}
@@ -33,7 +33,7 @@ func runDoctor(ctx context.Context, c *CLI, command CommandSpec, intent operatio
 	if err != nil {
 		return c.fail(ctx, err)
 	}
-	if code := c.emit(ctx, output); code != ExitOK {
+	if code := c.emitResult(ctx, output); code != ExitOK {
 		return code
 	}
 	if !report.Healthy() {

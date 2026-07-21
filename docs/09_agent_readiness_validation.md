@@ -53,7 +53,7 @@ For each derived command, verify all four stages.
 
 | Stage | Evidence |
 |---|---|
-| Discover | Root `view: index` exposes path, namespace, summary, capability, outcome, effect, and role plus a machine-readable `scope_request`; selected `view: scope` declares inputs, input sources, prerequisites, effect, output, authentication, errors, mutation facts, and workflow edges |
+| Discover | Root `view: index` exposes path, namespace, summary, capability, outcome, effect, and role plus a machine-readable `scope_request`; selected `view: scope` declares the argv grammar, inputs, input sources, prerequisites, effect, output, authentication, errors, mutation facts, and workflow edges |
 | Execute | Arguments are copied from declared fields or explicit configuration; the resolved command, exclusive reference/fixed target binding, effect, runtime target, auth requirement, and impact validate before I/O |
 | Interpret | The result is bound to its declared task and every target, parent, or scope dimension that task actually carries before rendering; scoped empty collections retain scope and interpretation-relevant absent, empty, zero, false, and unresolved states stay distinct; machine output has declared fields/types/delivery/collection coverage; structural runes are visibly projected; scoped I/O metadata marks external text as untrusted data; opaque references retain exact values and their field-required kinds |
 | Recover | Failure kind/code/retryability/next actions are structured; auth, permission, ambiguity, missing targets, rate limits, temporary failure, cancellation, and contract failure remain distinct |
@@ -107,7 +107,8 @@ Find a project by a human filter, obtain its canonical reference, and read its c
 - Multiple matches: discovery returns candidates or `ambiguous`; action is not attempted.
 - Stale project ID: `not_found` with discovery as a next action.
 - Page cursor loop or local bound: contract failure, no partial successful output.
-- Rate limit: `rate_limited`, retryable metadata, bounded retry-after; no duplicate logical operation.
+- Rate limit: `rate_limited`, independent retryable metadata and bounded
+  retry-after evidence; timing never authorizes a duplicate logical operation.
 
 ### Acceptance
 
@@ -161,7 +162,7 @@ go run ./cmd/agentic-cli-foundry sample read --id smp_2f4a6c8e0b1d --format json
 go run ./cmd/agentic-cli-foundry --error-format json sample read --id smp_000000000000
 ```
 
-The root agent contract must be schema version 5 with `view: index`, reveal the
+The root agent contract must be schema version 6 with `view: index`, reveal the
 `sample` namespace and both exact paths, and contain no input, output,
 authentication, error, mutation, fixed-target, or workflow detail. Its
 `scope_request` must identify the selector fields and exact invocation template.
@@ -173,7 +174,9 @@ selected scope. The scoped contract must use `view: scope`, contain only the
 relevant list/read commands, and represent the `sample` workflow as one
 reference-kind group with unique `producers[]` and `consumers[]`. The producer
 field plus consumer input and exact usage must provide the next argv without a
-command-local duplicate edge. The complete global and selected command contracts
+command-local duplicate edge. Its `invocation_grammar` must explain value and
+boolean flag forms, equals-only dash-prefixed flag values, and the
+positional-only marker. The complete global and selected command contracts
 remain present, including fault-local recovery actions. Its `io_contract` must
 publish `external_text_trust: untrusted_data`,
 `external_text_projection: visible_escape`, and
@@ -193,15 +196,15 @@ measurements were 1,517 bytes for root agent help, 5,359 bytes for exact
 `sample read` help, and 8,359 bytes for the `sample` namespace. The 512-byte
 limit continues to bound each root selection entry.
 
-With schema 5, the current root remains 1,517 bytes and the `sample` namespace
-is 8,222 bytes. The reduction is a consequence of removing redundant
-command-local reference next actions while retaining grouped workflow and
-fault-local recovery facts.
+With schema 6, measured on 2026-07-19, the current root remains 1,517 bytes,
+exact `sample read` help is 5,909 bytes, and the `sample` namespace is 8,814
+bytes. The scoped increase records executable input types, cardinality,
+defaults, and relations while the root remains selection-only.
 
-Schema 5 adds a fixed derived-scale regression with six selected commands, 18
+Schema 6 retains the fixed derived-scale regression with six selected commands, 18
 producer endpoints, 18 consumer endpoints, and 324 implicit same-kind edges.
-The grouped document is 24,493 UTF-8 bytes; a pair-expanded representation of
-the same facts is 177,759 bytes. The fixed corpus has a 65,536-byte
+The grouped document is 26,643 UTF-8 bytes; a pair-expanded representation of
+the same facts is 179,909 bytes. The fixed corpus has a 65,536-byte
 whole-response budget. The test expands the groups in memory and proves exact
 edge-set equality, so meeting the budget cannot delete producer fields,
 consumer inputs, usage, invocation contracts, or fault recovery. This is a

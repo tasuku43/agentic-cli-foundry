@@ -121,6 +121,10 @@ func inspect(root, scope string) ([]issue, error) {
 		return nil, err
 	}
 	issues = append(issues, workIssues...)
+	historicalLocaleExemptions, err := historicalWorkPacketLocaleExemptions(root, paths)
+	if err != nil {
+		return nil, err
+	}
 	linkIssues, err := checkMarkdownLinks(root, paths)
 	if err != nil {
 		return nil, err
@@ -140,7 +144,14 @@ func inspect(root, scope string) ([]issue, error) {
 		if bytes.IndexByte(data, 0) >= 0 || !utf8.Valid(data) {
 			continue
 		}
-		issues = append(issues, checkText(relative, string(data), config, denylist, scope)...)
+		issues = append(issues, checkTextWithLocaleExemption(
+			relative,
+			string(data),
+			config,
+			denylist,
+			scope,
+			workPacketLocaleExempt(relative, historicalLocaleExemptions),
+		)...)
 	}
 	if scope == "public" && config.Profile == "ready" {
 		for _, problem := range projectconfig.ReadyProblems(config.Project) {
@@ -220,6 +231,36 @@ func checkWorkPackets(root string, repositoryPaths []string) ([]issue, error) {
 	}
 	issues = append(issues, checkWorkSuccessorCycles(successorEdges)...)
 	return issues, nil
+}
+
+// historicalWorkPacketLocaleExemptions returns only packet roots whose goal
+// explicitly declares a terminal historical status. Malformed, missing,
+// Draft, Accepted, and Active metadata fail closed and receive no exemption.
+func historicalWorkPacketLocaleExemptions(root string, repositoryPaths []string) (map[string]bool, error) {
+	exemptions := make(map[string]bool)
+	for _, relative := range repositoryPaths {
+		parts := strings.Split(relative, "/")
+		if len(parts) != 4 || parts[0] != "docs" || parts[1] != "work" || parts[2] == "_template" || parts[3] != "goal.md" {
+			continue
+		}
+		data, err := readRegularRepositoryFile(root, relative)
+		if err != nil {
+			return nil, err
+		}
+		statuses := workMetadata(string(data), "Status")
+		if len(statuses) == 1 && (statuses[0].Value == "Complete" || statuses[0].Value == "Superseded") {
+			exemptions[pathpkg.Dir(relative)] = true
+		}
+	}
+	return exemptions, nil
+}
+
+func workPacketLocaleExempt(relative string, exemptions map[string]bool) bool {
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	if len(parts) < 4 || parts[0] != "docs" || parts[1] != "work" {
+		return false
+	}
+	return exemptions[pathpkg.Join(parts[0], parts[1], parts[2])]
 }
 
 func checkCompletedWorkPacket(root, goalPath, goalText string, available map[string]bool) []issue {
@@ -1033,11 +1074,29 @@ func validateMarkdownTarget(root, source, local string, publishable map[string]b
 }
 
 func checkText(path, text string, config projectconfig.Config, denylist []string, scope string) []issue {
+	return checkTextWithLocaleExemption(path, text, config, denylist, scope, false)
+}
+
+func checkTextWithLocaleExemption(path, text string, config projectconfig.Config, denylist []string, scope string, documentationLocaleExempt bool) []issue {
 	var issues []issue
 	scannerSource := path == "tools/repoguard/main.go"
 	lines := strings.Split(text, "\n")
+	checkDocumentationLocale := strings.HasSuffix(strings.ToLower(path), ".md") &&
+		!documentationLocaleExempt &&
+		isEnglishDocumentationLocale(config.PublicGuard.DocumentationLocale)
+	documentationLines := lines
+	documentationVisible := make([]bool, len(lines))
+	if checkDocumentationLocale {
+		documentationLines, documentationVisible = projectDocumentationLocale(lines)
+	}
 	for index, line := range lines {
 		lineNumber := index + 1
+		documentationLine := line
+		visible := true
+		if checkDocumentationLocale {
+			documentationLine = documentationLines[index]
+			visible = documentationVisible[index]
+		}
 		if config.Profile == "ready" && path != "tools/internal/projectconfig/defaults.go" {
 			if identity := remainingTemplateIdentity(line, config.Project); identity != "" {
 				issues = append(issues, issue{Path: path, Line: lineNumber, Message: fmt.Sprintf("template identity %q remains after bootstrap", identity)})
@@ -1046,8 +1105,8 @@ func checkText(path, text string, config projectconfig.Config, denylist []string
 		if config.Profile == "ready" && !scannerSource && bootstrapPlaceholder.MatchString(line) {
 			issues = append(issues, issue{Path: path, Line: lineNumber, Message: "unresolved bootstrap placeholder"})
 		}
-		if strings.HasSuffix(strings.ToLower(path), ".md") && japaneseText.MatchString(line) {
-			issues = append(issues, issue{Path: path, Line: lineNumber, Message: "documentation must be written in English"})
+		if checkDocumentationLocale && visible && japaneseText.MatchString(documentationLine) {
+			issues = append(issues, issue{Path: path, Line: lineNumber, Message: "documentation contains Japanese text while public_guard.documentation_locale is English"})
 		}
 		if !scannerSource && absoluteHome.MatchString(line) {
 			issues = append(issues, issue{Path: path, Line: lineNumber, Message: "machine-specific home directory path"})
@@ -1068,6 +1127,258 @@ func checkText(path, text string, config projectconfig.Config, denylist []string
 		}
 	}
 	return issues
+}
+
+// projectDocumentationLocale masks fenced blocks, HTML comments, block quotes,
+// bounded inline-code spans, and parsed link destinations while preserving one
+// result per source line. Blank lines, quotes, and fences bound inline parsing,
+// so an unmatched delimiter cannot hide later trusted prose.
+func projectDocumentationLocale(lines []string) ([]string, []bool) {
+	projected := make([]string, len(lines))
+	visible := make([]bool, len(lines))
+	scanner := workMarkdownScanner{}
+	for index, line := range lines {
+		projected[index], visible[index] = scanner.visible(line)
+		if visible[index] && strings.HasPrefix(strings.TrimLeft(projected[index], " \t"), ">") {
+			visible[index] = false
+		}
+	}
+	for start := 0; start < len(lines); {
+		if !visible[start] || workASCIIBlankLine(projected[start]) {
+			start++
+			continue
+		}
+		end := start + 1
+		for end < len(lines) && visible[end] && !workASCIIBlankLine(projected[end]) {
+			end++
+		}
+		segment := strings.Join(projected[start:end], "\n")
+		maskedSegment := maskMarkdownInlineCode(segment)
+		maskedLines := strings.Split(maskedSegment, "\n")
+		for offset, line := range maskedLines {
+			masked := []byte(line)
+			maskMarkdownLinkDestinations(line, masked)
+			projected[start+offset] = string(masked)
+		}
+		start = end
+	}
+	return projected, visible
+}
+
+func maskMarkdownLocaleNonProse(line string) string {
+	projected, _ := projectDocumentationLocale([]string{line})
+	return projected[0]
+}
+
+func maskMarkdownInlineCode(text string) string {
+	masked := []byte(text)
+	for index := 0; index < len(text); {
+		if text[index] != '`' || workEscapedAt(text, index) {
+			index++
+			continue
+		}
+		run := workBacktickRun(text, index)
+		closing := matchingBacktickRun(text, index+run, run)
+		if closing < 0 {
+			index += run
+			continue
+		}
+		maskMarkdownBytes(masked, index, closing+run)
+		index = closing + run
+	}
+	return string(masked)
+}
+
+func maskMarkdownLinkDestinations(line string, masked []byte) {
+	maskMarkdownReferenceDestination(line, masked)
+	for index := 0; index < len(line); {
+		if line[index] != '[' || workEscapedAt(line, index) {
+			index++
+			continue
+		}
+		labelEnd := matchingMarkdownBracket(line, index)
+		if labelEnd < 0 || labelEnd+1 >= len(line) || line[labelEnd+1] != '(' {
+			index++
+			continue
+		}
+		start, end, closeIndex, ok := markdownInlineDestination(line, labelEnd+1)
+		if !ok {
+			index++
+			continue
+		}
+		maskMarkdownBytes(masked, start, end)
+		index = closeIndex + 1
+	}
+}
+
+func maskMarkdownReferenceDestination(line string, masked []byte) {
+	index := 0
+	for index < len(line) && (line[index] == ' ' || line[index] == '\t') {
+		index++
+	}
+	if index >= len(line) || line[index] != '[' || workEscapedAt(line, index) {
+		return
+	}
+	labelEnd := matchingMarkdownBracket(line, index)
+	if labelEnd < 0 || labelEnd+1 >= len(line) || line[labelEnd+1] != ':' {
+		return
+	}
+	start, end, ok := markdownStandaloneDestination(line, labelEnd+2)
+	if ok {
+		maskMarkdownBytes(masked, start, end)
+	}
+}
+
+func matchingMarkdownBracket(line string, start int) int {
+	depth := 0
+	for index := start; index < len(line); index++ {
+		if workEscapedAt(line, index) {
+			continue
+		}
+		switch line[index] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return index
+			}
+		}
+	}
+	return -1
+}
+
+func markdownInlineDestination(line string, open int) (int, int, int, bool) {
+	index := skipMarkdownSpace(line, open+1)
+	if index >= len(line) {
+		return 0, 0, 0, false
+	}
+	if line[index] == '<' {
+		end := markdownUnescapedByte(line, index+1, '>')
+		if end < 0 {
+			return 0, 0, 0, false
+		}
+		closeIndex, ok := markdownLinkTail(line, end+1)
+		return index + 1, end, closeIndex, ok
+	}
+	start := index
+	depth := 0
+	for index < len(line) {
+		if workEscapedAt(line, index) {
+			index++
+			continue
+		}
+		switch line[index] {
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return start, index, index, true
+			}
+			depth--
+		case ' ', '\t':
+			if depth != 0 {
+				return 0, 0, 0, false
+			}
+			closeIndex, ok := markdownLinkTail(line, index)
+			return start, index, closeIndex, ok
+		}
+		index++
+	}
+	return 0, 0, 0, false
+}
+
+func markdownLinkTail(line string, start int) (int, bool) {
+	index := skipMarkdownSpace(line, start)
+	if index < len(line) && line[index] == ')' {
+		return index, true
+	}
+	if index >= len(line) || (line[index] != '\'' && line[index] != '"' && line[index] != '(') {
+		return 0, false
+	}
+	opening := line[index]
+	closing := opening
+	if opening == '(' {
+		closing = ')'
+	}
+	titleEnd := markdownUnescapedByte(line, index+1, closing)
+	if titleEnd < 0 {
+		return 0, false
+	}
+	index = skipMarkdownSpace(line, titleEnd+1)
+	return index, index < len(line) && line[index] == ')'
+}
+
+func markdownStandaloneDestination(line string, start int) (int, int, bool) {
+	index := skipMarkdownSpace(line, start)
+	if index >= len(line) {
+		return 0, 0, false
+	}
+	if line[index] == '<' {
+		end := markdownUnescapedByte(line, index+1, '>')
+		return index + 1, end, end >= 0
+	}
+	begin := index
+	depth := 0
+	for index < len(line) && line[index] != ' ' && line[index] != '\t' {
+		if workEscapedAt(line, index) {
+			index++
+			continue
+		}
+		if line[index] == '(' {
+			depth++
+		} else if line[index] == ')' {
+			if depth == 0 {
+				return 0, 0, false
+			}
+			depth--
+		}
+		index++
+	}
+	return begin, index, depth == 0
+}
+
+func skipMarkdownSpace(line string, start int) int {
+	for start < len(line) && (line[start] == ' ' || line[start] == '\t') {
+		start++
+	}
+	return start
+}
+
+func markdownUnescapedByte(line string, start int, target byte) int {
+	for index := start; index < len(line); index++ {
+		if line[index] == target && !workEscapedAt(line, index) {
+			return index
+		}
+	}
+	return -1
+}
+
+func matchingBacktickRun(line string, start, length int) int {
+	for index := start; index < len(line); {
+		if line[index] != '`' || workEscapedAt(line, index) {
+			index++
+			continue
+		}
+		run := workBacktickRun(line, index)
+		if run == length {
+			return index
+		}
+		index += run
+	}
+	return -1
+}
+
+func maskMarkdownBytes(masked []byte, start, end int) {
+	for index := start; index < end; index++ {
+		if masked[index] != '\t' && masked[index] != '\n' && masked[index] != '\r' {
+			masked[index] = ' '
+		}
+	}
+}
+
+func isEnglishDocumentationLocale(locale string) bool {
+	return locale == "en" || strings.HasPrefix(locale, "en-") || locale == "eng" || strings.HasPrefix(locale, "eng-")
 }
 
 func checkFormulaPlaceholder(path, line string, lineNumber int) []issue {

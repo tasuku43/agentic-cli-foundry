@@ -9,6 +9,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,11 +142,28 @@ func runGoWithEnv(root string, overrides []string, args ...string) ([]byte, erro
 		}
 		command.Env = append(environment, overrides...)
 	}
-	output, err := command.CombinedOutput()
+	output, diagnostics, err := commandOutput(command, os.Stderr)
 	if err != nil {
-		return nil, fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, output)
+		return nil, fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, diagnostics)
 	}
 	return output, nil
+}
+
+func commandOutput(command *exec.Cmd, diagnosticWriter io.Writer) ([]byte, []byte, error) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	if err == nil && stderr.Len() != 0 {
+		if diagnosticWriter == nil {
+			return stdout.Bytes(), stderr.Bytes(), errors.New("successful command diagnostics have no reporting stream")
+		}
+		if _, writeErr := diagnosticWriter.Write(stderr.Bytes()); writeErr != nil {
+			return stdout.Bytes(), stderr.Bytes(), fmt.Errorf("report successful command diagnostics: %w", writeErr)
+		}
+	}
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
 func mergeListedPackage(existing, incoming listedPackage) listedPackage {

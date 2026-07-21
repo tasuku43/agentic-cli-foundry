@@ -108,7 +108,13 @@ For a mutation, the boundary performs this order:
 
 A rejection at steps 1–3 must result in zero mutation attempts. Tests use fakes or counters to prove this order.
 
-Cancellation is interpreted relative to that boundary. Before step 4, the invoker can prove zero attempts and may expose retryable `operation_canceled`. After step 4 begins, a valid structured adapter fault remains authoritative and is copied without its private cause. A raw error or cancellation cannot prove rollback; it becomes non-retryable `unclassified_mutation_outcome`, whose catalog recovery must be a read-only reconciliation command. A confirmed nil result is not replaced by a later context cancellation.
+Cancellation is interpreted relative to that boundary. Before step 4, the invoker can prove zero attempts and may expose retryable `operation_canceled`. After step 4 begins, a valid structured adapter fault remains authoritative and is copied without its private cause. A raw error or cancellation cannot prove rollback; it becomes non-retryable `unclassified_mutation_outcome`, whose catalog recovery must be a read-only reconciliation command. A confirmed nil result is not replaced by a later context cancellation, including at the final CLI write: the effect-aware output finalizer preserves confirmed mutation success, while read output retains the pre-write cancellation check. If that confirmed result cannot be written completely, `mutation_output_write_failed` is non-retryable and also permits only read-only reconciliation.
+
+Provider rate evidence and replay permission are different security facts.
+`retry_after` may carry an authoritative positive wait window on a
+non-retryable `rate_limited` mutation. Only `retryable` authorizes repeating the
+same logical command; timing can guide reconciliation, a different safe read,
+or a later independently authorized operation.
 
 Application ports treat both a nil interface and an interface containing a typed nil pointer as missing configuration. The shared port check prevents a dependency-wiring mistake from becoming a panic after validation or policy approval.
 
@@ -123,7 +129,7 @@ The base template contains a secret-free authentication contract, an ephemeral n
 - revocation and expiration behavior;
 - tests and scans that fail on unsafe handling.
 
-Secrets must not cross from infrastructure into domain or application values and must not be accepted through command-line arguments when a safer channel is available. Public client identifiers, public redirect URIs, the explicitly selected method, and schema metadata may use the non-secret configuration boundary; token, PAT, refresh token, authorization code, PKCE verifier, and client secret never do. The boundary uses strict bounded decoding, rejects unknown schema, symlinks, non-regular files, and unsafe permissions, replaces atomically, and reports corrupt state read-only rather than repairing or falling back. Do not persist tokens in plaintext configuration or test real credentials in CI. Read [Authentication](07_authentication.md) and [ADR 0001](decisions/0001-oauth-library-boundary.md) before implementing OAuth or PAT support.
+Secrets must not cross from infrastructure into domain or application values and must not be accepted through command-line arguments when a safer channel is available. Public client identifiers, public redirect URIs, the explicitly selected method, and schema metadata may use the non-secret configuration boundary; token, PAT, refresh token, authorization code, PKCE verifier, and client secret never do. The boundary uses strict bounded decoding, rejects unknown schema, symlinks, and non-regular files, confines replacement through a verified opened directory, revalidates the directory, target, and staged-file identities immediately before replacement, and reports corrupt state read-only rather than repairing or falling back. On Unix it also rejects unsafe owner modes and syncs the replaced directory. Windows still enforces regular shape and confinement, but portable mode bits do not prove ACL ownership and the portable API does not justify an atomicity or durability claim, so an error after replacement begins leaves the active version explicitly uncertain. Do not persist tokens in plaintext configuration or test real credentials in CI. Read [Authentication](07_authentication.md) and [ADR 0001](decisions/0001-oauth-library-boundary.md) before implementing OAuth or PAT support.
 
 ## Filesystem, process, and network policy
 
@@ -156,7 +162,7 @@ Remote or file-derived text may contain terminal controls, format characters, Un
 
 This projection protects terminal and TSV/JSON structure. It does **not** detect intent in printable text, remove prompt-like content, or prove that a language model will ignore it. Printable text such as `SYSTEM ...` or JSON-looking content remains semantically untrusted data. Agent consumers must keep data fields separate from instructions and apply their own trust policy; the CLI cannot claim semantic prompt-injection prevention.
 
-Scoped agent help publishes this boundary in `io_contract`: `external_text_trust` is `untrusted_data`, `external_text_projection` is `visible_escape`, and `opaque_reference_policy` is `validated_exact_bytes`.
+Scoped agent help publishes this boundary in `io_contract`: `external_text_trust` is `untrusted_data`, `external_text_projection` is `visible_escape`, and `opaque_reference_policy` is `validated_exact_bytes`. A configured documentation locale governs trusted repository and CLI-authored prose only. It never translates stable command paths, flags, environment variables, fault codes, JSON keys, schema values, reference kinds, or provider-controlled text.
 
 A derived project must decide:
 
@@ -187,6 +193,9 @@ universal result shape.
 - Verify module integrity and known vulnerabilities in the security profile.
 - Review generated changes and prove generation is reproducible.
 - Build releases from reviewed source through the documented workflow.
+- Reopen each completed archive and verify its exact canonical entry set, mode,
+  metadata, and bytes against reviewed executable, license, and optional notice
+  inputs before publication.
 - Decide signing and provenance explicitly; absence of signing is also a release-model decision.
 
 ## Required negative tests

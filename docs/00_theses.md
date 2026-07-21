@@ -113,9 +113,15 @@ presented as a closed task outcome.
 
 ### Consequences
 
-- Root help is a compact index; command help contains the exact usage and effect.
+- Human root help is a compact command/namespace index; namespace help lists its
+  relative leaves; exact command help contains usage, effect, and the complete
+  executable input contract.
 - Root agent help exposes only outcome-selection facts and a machine-readable scoped-help request; exact-command and namespace help expose invocation, output, authentication, failure, mutation, and workflow details.
 - Help and dispatch derive from the same static catalog.
+- Value kind, single/repeatable cardinality, omission default, numeric bounds,
+  and input dependencies/conflicts derive from the same catalog entry as argv
+  parsing. An omitted value, a catalog default, and an explicitly supplied
+  empty/zero/false value remain distinguishable.
 - Output shape, exit behavior, and error ownership are deliberate public contracts.
 - Deterministic multi-step behavior belongs in an application use case rather than an agent prompt.
 - Domain and application results preserve declared task identity, every request
@@ -127,7 +133,11 @@ presented as a closed task outcome.
 
 ### Mechanical enforcement
 
-- Catalog-wide help and routing contract tests run without external I/O.
+- Catalog-wide help, typed parsing, and routing contract tests run without
+  external I/O.
+- Parser contract tests exercise text, boolean, integer, repeated, defaulted,
+  bounded, dependent, conflicting, absent, and explicitly empty inputs without
+  a handler-owned parallel registry.
 - Agent-help shape and growth tests reject detailed contracts leaking back into
   the root index and prove an unknown outcome reaches one selected scoped task
   contract in at most two help-discovery invocations. A known path needs one
@@ -217,6 +227,10 @@ An operation's effect, intent, and target are product facts. They must be known 
 - Unknown or inconsistent effects fail closed.
 - Authentication, confirmation, audit, dry-run, and policy decisions can attach to one execution boundary.
 - Adapters receive bounded inputs rather than unrestricted clients or executors.
+- A confirmed mutation result crosses a dedicated complete-write boundary; a
+  cancellation observed after confirmation cannot turn success into a safe
+  retry claim. Provider rate-window evidence remains independent from whether
+  repeating the same logical mutation is permitted.
 
 ### Mechanical enforcement
 
@@ -269,12 +283,17 @@ Once source or history reaches a public remote, confidentiality cannot be restor
 - Derived repositories start with clean history rather than copying a private `.git` directory.
 - Runnable public defaults replace organization-specific placeholders.
 - Fixtures use synthetic identities and data.
+- One explicit documentation locale governs trusted repository prose. Stable
+  command paths, flags, environment names, fault codes, JSON keys, schema
+  values, and reference kinds remain language-neutral machine identifiers;
+  external text remains untranslated untrusted data.
 - License, disclosure channel, dependency rights, and release behavior are decided before publication.
 - Private URLs, organization names, credentials, and internal operating procedures are prohibited in all tracked and generated content.
 
 ### Mechanical enforcement
 
-- `.harness/project.json` records identity and public-boundary policy.
+- `.harness/project.json` records identity, documentation locale, and
+  public-boundary policy.
 - `tools/repoguard` checks forbidden identifiers, secrets, placeholders, required community files, and repository readiness.
 - `task security` scans source and configuration.
 - `task public:check` is required before the first public push and public release.
@@ -293,7 +312,8 @@ The project should not depend on one maintainer remembering parallel registries,
 ### Consequences
 
 - `AGENTS.md` is the only agent-policy source of truth.
-- `cli.Catalog` is canonical; help and dispatch do not maintain separate lists.
+- `cli.Catalog` is canonical; typed parsing, help, and dispatch do not maintain
+  separate input or command lists.
 - `scripts/check.sh` is canonical; Task, optional local automation, and CI do not duplicate commands.
 - Durable decisions live in theses, numbered docs, or ADRs; active implementation state lives in work packets.
 - Dependencies are added only when their safety and maintenance value exceeds their ongoing cost.

@@ -13,10 +13,12 @@ This document defines the small set of cross-project contracts supplied for API-
 | Effects | `read`, `create`, or `write`; a create binds one opaque parent/scope input, a write binds one matching opaque existing-target input plus optional parent, generic impact is explicit, and policy is injected at one application boundary | Confirmation, approval, dry-run, OS authentication, authorization reuse, and domain-specific impact |
 | Pagination and coverage | Opaque cursor envelope, explicit budgets, loop detection, cancellation, complete-or-no-result delivery, a JSON-only public-page contract with a top-level completion cursor, and an explicit collection-coverage class | Exhaustive task scope, bounded or differential window meaning, page size, ordering/snapshot semantics, limits, and user overrides |
 | Calls | Finite timeout, attempt count, and upstream idempotency are explicit; unsafe mutation retry is rejected | Vendor error classification, retry/backoff budget, idempotency-key support, and endpoint-specific timeouts |
+| Payload presence | Domain/application input retains omitted versus explicit empty/zero/false and declares replacement, patch, or append semantics before wire encoding | Which fields may clear, remain unchanged, append, reject empty, or map to provider `null` |
 | Failures | Stable kind/code/retryability/next-action model | Product-specific codes and commands that resolve a failure |
 | Schemas | Wire DTOs stay in infrastructure; drift is tested with publishable fixtures | Schema source, update cadence, unknown-field policy, compatibility window, and fixture license |
 | Capabilities | Public catalog entries are finite and validated; unsupported work is recorded rather than exposed accidentally | Upstream coverage, deferred/internal capabilities, owners, rollout order, and explicit non-goals |
 | Output | Declared format, fields, types, delivery, collection coverage, terminal escaping, and contract tests | Which human and machine formats are stable, the exact collection scope/window, and the bounded size/streaming policy |
+| Result interpretation | Request identity/dimensions, access limitation, and optional enrichment remain typed independently of presentation | Provider-specific visibility states, enrichment sources, uncertainty, and mandatory versus optional relations |
 | Release | One gate, public-boundary checks, byte-for-byte reproducible archives for identical pinned inputs, checksums, and immutable release intent | Supported platforms, signing/provenance, package managers, cadence, and long-term support |
 
 The template side of this table fixes vocabulary, validation, and enforcement points; it does not silently choose the derived-side settings. The derived side is not a gap: it is where the product thesis and security model must become concrete before the corresponding live capability is enabled.
@@ -82,6 +84,53 @@ cursor traversal reaches completion.
 
 Paged commands support only JSON and use JSON as their default. This keeps every successful presentation self-describing and prevents a text or TSV page without a completion marker from looking exhaustive. Catalog validation rejects an unknown delivery or coverage, paged plus `not_applicable`, a missing paged binding, a binding on complete delivery, any other output format, a required or non-CLI cursor input, an invalid or colliding top-level cursor field, a missing or unknown completion rule, non-opaque cursors, kind mismatch, and extra cursor candidates. Renderer fixture checks require the top-level cursor to be present and string-typed. Agent help projects the binding with the input/output contracts and derives a same-command continuation workflow, so an agent passes the emitted cursor bytes back without trimming, decoding, or guessing. A declared page is not an incomplete successful output; silently truncating that page, omitting its continuation cursor, or reaching a local limit without a cursor is a contract failure.
 
+## Payload presence and update semantics
+
+Before an adapter builds a provider request, the task contract classifies each
+mutation payload as one of these shapes:
+
+- **replacement:** the command supplies the complete task-owned state being
+  replaced; every omitted field has one declared domain meaning and the adapter
+  does not reinterpret omission as “leave unchanged”;
+- **patch:** each field carries explicit presence independently from its value;
+  absent means no change, while present empty, zero, or false remains an
+  intentional value such as clear/disable when the product permits it;
+- **append/additive:** supplied values are added to existing state; the product
+  declares whether an explicitly empty collection is a no-op or invalid input,
+  and omission is not silently promoted into an empty append.
+
+Use task-owned optional or presence types rather than reconstructing intent
+from Go zero values, pointer allocation, JSON `omitempty`, flag order, or
+provider defaults. Provider `null`, an omitted property, an empty
+array/object/string, zero, and false are distinct whenever the upstream
+protocol distinguishes them. The domain/application contract decides which
+distinctions matter, and the infrastructure wire DTO preserves that decision
+exactly.
+
+Adapter tests assert the complete encoded body for every meaningful presence
+state and prove invalid combinations make zero provider calls. Include at least
+omitted, explicit empty/zero/false, clear, and ordinary non-empty cases that the
+task supports. A provider SDK convenience type is not evidence that its
+`omitempty` behavior matches the product contract.
+
+## Result access and optional enrichment
+
+Successful delivery and collection coverage do not imply that the authenticated
+identity could observe every provider object. When the provider reports hidden,
+forbidden, unavailable, or redacted records inside an otherwise valid task
+scope, preserve that limitation as a task-owned typed state. Do not collapse it
+into an empty collection, silently weaken `collection_coverage`, or infer the
+missing facts from neighboring records.
+
+Separate a valid core wire record from optional semantic enrichment. If core
+identity, encoding, bounds, or request-dimension checks fail, the whole result
+fails. If an explicitly optional relationship or annotation cannot be
+established, the core result may remain successful only when the entire
+affected enrichment is marked unknown or unavailable with a bounded reason. Do
+not publish a partially guessed relation from labels, order, indentation,
+cached neighbors, or provider notation. Tests cover valid enrichment, wholly
+absent or unknown enrichment, and a negative-inference canary.
+
 ## Timeout, retry, and idempotency
 
 `domain/apicall.Policy` is declared per adapter operation:
@@ -92,13 +141,19 @@ Paged commands support only JSON and use JSON as their default. This keeps every
 - A keyed operation has one opaque key per logical operation and reuses it across transport attempts.
 - A mutation with more than one attempt is valid only when the upstream operation is safe or keyed.
 
-The application mutation invoker calls its action once. Any proven-safe transport retry happens inside the adapter and does not repeat policy, confirmation, or logical intent construction. An adapter may retry only typed retryable failures, must respect `Retry-After` when applicable, and must not sleep past context cancellation or its overall budget.
+The application mutation invoker calls its action once. Any proven-safe transport retry happens inside the adapter and does not repeat policy, confirmation, or logical intent construction. An adapter may retry only typed retryable failures, must respect `Retry-After` when applicable, and must not sleep past context cancellation or its overall budget. `retry_after` is timing evidence, not replay permission: a rate-limited mutation may expose an authoritative positive window while remaining non-retryable. A missing window means timing is unknown, not immediate permission. Only `retryable` answers whether the same logical command may be repeated.
 
 Read-only application services recheck cancellation immediately after a port returns and suppress the result when a port ignored cancellation. Because exhaustive pagination returns no partial result, every `operation_canceled` path in its drain is retryable and matches the catalog's common read cancellation contract.
 
 Mutation semantics are phase-sensitive. Before the action call, `execution.Invoker` guarantees zero mutation attempts, so its common `operation_canceled` fault is retryable. Once the action is called, cancellation does not prove that the provider rejected or rolled back the effect. A valid structured adapter fault is authoritative even when its private cause is `context.Canceled` or `context.DeadlineExceeded`; the invoker returns a detached `fault.PublicCopy` and preserves its kind, code, and retryability. Any other action error, including a raw cancellation, becomes non-retryable `contract/unclassified_mutation_outcome` because the invoker cannot infer whether the effect occurred. That common fault must point only to an exact read-only reconciliation command. A nil action error is a confirmed success and is not overwritten by cancellation observed after confirmation.
 
 The adapter contract must distinguish a request that was not sent, a confirmed result, and an unknown outcome when the provider makes that distinction possible. An unknown mutation outcome is non-retryable by default and points to an exact read/discover command that reconciles the target before another write. Do not translate cancellation into permission to repeat an unsafe action.
+
+After an action has returned confirmed success, the CLI's effect-aware output
+finalizer does not reclassify that success because cancellation arrived before
+the stdout write. A short or failed write still prevents exit 0, but it becomes
+non-retryable `mutation_output_write_failed` and points only to read-only
+reconciliation. It never tells the caller to repeat the confirmed mutation.
 
 The template does not select a backoff formula or universal numeric ceiling because vendor limits and latency budgets differ. A derived security/product contract records the maximum accepted timeout and attempt count, formula, jitter source, caps, and tests; user configuration above those bounds must fail rather than create an effectively unbounded call.
 
@@ -128,7 +183,8 @@ The binding rules distinguish an object that does not exist yet from an existing
 - `kind`: broad recovery class;
 - `code`: stable project-specific identifier;
 - `retryable`: whether repeating the same logical command can be correct;
-- optional `retry_after`;
+- optional `retry_after`, which is authoritative rate-window evidence when
+  positive and otherwise unknown; it never overrides `retryable`;
 - `next_actions`: exact commands that can resolve or investigate the failure;
 - a human message that is useful but not required for machine classification.
 
@@ -169,10 +225,12 @@ Before an external adapter is complete, prove:
 1. Required authentication is declared and no secret crosses into application/domain/output.
 2. The same context reaches every call; canceled reads emit no result, and mutation outcome uncertainty never enables an unsafe retry.
 3. Timeout, response-size, pagination, and traversal budgets are finite.
-4. Retryability and idempotency are explicit; unsafe mutation retry fails validation.
-5. Wire fixtures cover drift and hostile data; terminal projection escapes control characters.
-6. Every failure maps to a stable kind/code and useful next action.
-7. Discovery returns canonical opaque references and action forwards them unchanged.
-8. Missing or mismatched mutation bindings, malformed runtime targets, policy denial, auth failure, and cancellation each make zero mutation attempts.
-9. Success output matches its declared schema and is emitted only when complete.
-10. `task check`, `task security`, and any adapter-specific contract test pass.
+4. Retryability and idempotency are explicit; unsafe mutation retry fails validation, and rate timing is not treated as replay permission.
+5. Replacement, patch, or append semantics preserve every meaningful omitted, empty, zero, false, and provider-null state in exact request-body fixtures.
+6. Core result validity, access limitations, and optional enrichment are typed separately; optional enrichment fails wholly unknown rather than partially guessed.
+7. Wire fixtures cover drift and hostile data; terminal projection escapes control characters.
+8. Every failure maps to a stable kind/code and useful next action.
+9. Discovery returns canonical opaque references and action forwards them unchanged.
+10. Missing or mismatched mutation bindings, malformed runtime targets, policy denial, auth failure, and cancellation each make zero mutation attempts.
+11. Success output matches its declared schema and is emitted only when complete; confirmed mutation output survives late cancellation and a write failure cannot authorize replay.
+12. `task check`, `task security`, and any adapter-specific contract test pass.
