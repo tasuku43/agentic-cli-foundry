@@ -372,10 +372,18 @@ func TestStoreTemporaryValidationRejectsChangedIdentityAndSize(t *testing.T) {
 	if err := validateTemporary(root, name, expected, int64(len(contents)+1)); !errors.Is(err, ErrUnsafePath) {
 		t.Fatalf("changed temporary size error = %v", err)
 	}
-	if err := root.Remove(name); err != nil {
+	replacement, replacementName, err := createRootTemporary(root)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := root.WriteFile(name, contents, 0o600); err != nil {
+	defer root.Remove(replacementName)
+	if _, err := replacement.Write(contents); err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Rename(replacementName, name); err != nil {
 		t.Fatal(err)
 	}
 	if err := validateTemporary(root, name, expected, int64(len(contents))); !errors.Is(err, ErrUnsafePath) {
